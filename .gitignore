@@ -1,0 +1,18 @@
+node_modules/
+dist/
+dist-server/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+# The canonical workspace can contain private Lark messages and work context.
+workspace/
+.context-cache/
+
+# Local editor state
+.idea/
+.vscode/
+*.swp
