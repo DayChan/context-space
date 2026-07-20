@@ -161,14 +161,28 @@ export class MarkdownIndexRepository {
     }));
   }
 
-  all<T extends BaseMetadata = BaseMetadata>(): WorkspaceDocument<T>[] {
+  all<T extends BaseMetadata = BaseMetadata>(
+    options: { type?: string; status?: string } = {}
+  ): WorkspaceDocument<T>[] {
     const generation = this.activeGeneration();
     if (!generation) return [];
+    const clauses = ["generation_id = ?"];
+    const parameters: unknown[] = [generation];
+    if (options.type) {
+      clauses.push("type = ?");
+      parameters.push(options.type);
+    }
+    if (options.status) {
+      clauses.push("status = ?");
+      parameters.push(options.status);
+    }
     const rows = this.database.connection
       .prepare(
-        "SELECT * FROM markdown_documents WHERE generation_id = ? ORDER BY path"
+        `SELECT * FROM markdown_documents
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY path`
       )
-      .all(generation) as MarkdownRow[];
+      .all(...parameters) as MarkdownRow[];
     return rows.map((row) => this.hydrate<T>(row));
   }
 

@@ -48,9 +48,15 @@ export class ContextIndex {
     return this.size;
   }
 
-  all<T extends BaseMetadata = BaseMetadata>(): WorkspaceDocument<T>[] {
-    if (this.repository) return this.repository.all<T>();
-    return [...this.documentsByPath.values()] as WorkspaceDocument<T>[];
+  all<T extends BaseMetadata = BaseMetadata>(
+    options: { type?: string; status?: string } = {}
+  ): WorkspaceDocument<T>[] {
+    const documents = this.repository
+      ? this.repository.all<T>(options)
+      : ([...this.documentsByPath.values()] as WorkspaceDocument<T>[]);
+    return documents
+      .filter(({ data }) => !options.type || data.type === options.type)
+      .filter(({ data }) => !options.status || data.status === options.status);
   }
 
   byId<T extends BaseMetadata = BaseMetadata>(id: string): WorkspaceDocument<T> | undefined {

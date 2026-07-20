@@ -248,6 +248,8 @@ async function apiDocument(
   options: {
     includePersonProvenance?: boolean;
     includeBacklinks?: boolean;
+    includePersonInsights?: boolean;
+    personTodos?: Array<WorkspaceDocument<TodoMetadata>>;
     provenancePage?: number;
     provenancePageSize?: number;
   } = {}
@@ -269,33 +271,39 @@ async function apiDocument(
     };
   }
   if (isPerson(document)) {
-    const todos = runtime.query.all().filter(isTodo);
+    const todos =
+      options.personTodos ??
+      runtime.query.all({ type: "todo" }).filter(isTodo);
     const relationships = commitmentsForPerson(document.data.id, todos);
-    const pendingInsights = runtime.candidateReview
-      .list(null)
-      .filter(
-        (candidate) =>
-          candidate.kind === "person_insight" &&
-          (candidate.status === "proposed" || candidate.status === "pending") &&
-          candidate.data.person_id === document.data.id
-      )
-      .map((candidate) => ({
-        ...candidate,
-        acceptance: runtime.analysisResults.getAcceptance(candidate.id)
-      }));
-    const acceptedInsights = runtime.index
-      .all<PersonMetadata>()
-      .filter(
-        (candidate) =>
-          candidate.data.type === "person" &&
-          candidate.data.related_person_id === document.data.id
-      )
-      .map(({ path, data }) => ({
-        id: data.id,
-        title: data.title,
-        path,
-        observations: data.observations
-      }));
+    const includePersonInsights = options.includePersonInsights ?? true;
+    const pendingInsights = includePersonInsights
+      ? runtime.candidateReview
+          .list(null)
+          .filter(
+            (candidate) =>
+              candidate.kind === "person_insight" &&
+              (candidate.status === "proposed" || candidate.status === "pending") &&
+              candidate.data.person_id === document.data.id
+          )
+          .map((candidate) => ({
+            ...candidate,
+            acceptance: runtime.analysisResults.getAcceptance(candidate.id)
+          }))
+      : [];
+    const acceptedInsights = includePersonInsights
+      ? runtime.index
+          .all<PersonMetadata>({ type: "person" })
+          .filter(
+            (candidate) =>
+              candidate.data.related_person_id === document.data.id
+          )
+          .map(({ path, data }) => ({
+            id: data.id,
+            title: data.title,
+            path,
+            observations: data.observations
+          }))
+      : [];
     const page = options.provenancePage ?? 1;
     const pageSize = options.provenancePageSize ?? 10;
     const resolvedSources = options.includePersonProvenance
@@ -579,17 +587,19 @@ export async function createApp(options: CreateAppOptions): Promise<{
     const direction =
       typeof request.query.direction === "string" ? request.query.direction : undefined;
     const leaders = await runtime.getLeaders();
-    const selected = query
-      .all()
-      .filter((document) => !type || document.data.type === type)
-      .filter((document) => !status || document.data.status === status)
-      .filter(
-        (document) =>
-          !direction ||
-          (document.data.type === "todo" && (document.data as TodoMetadata).direction === direction)
-      );
+    const selected = query.all({ type, status, direction });
+    const personTodos = selected.some(isPerson)
+      ? query.all({ type: "todo" }).filter(isTodo)
+      : undefined;
     response.json(
-      await Promise.all(selected.map((document) => apiDocument(document, runtime, leaders)))
+      await Promise.all(
+        selected.map((document) =>
+          apiDocument(document, runtime, leaders, {
+            includePersonInsights: false,
+            personTodos
+          })
+        )
+      )
     );
   });
 

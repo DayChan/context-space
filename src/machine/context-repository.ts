@@ -61,6 +61,24 @@ function readString(
   return null;
 }
 
+const UNKNOWN_PARTICIPANT_NAMES = new Set([
+  "Unknown",
+  "Lark user",
+  "Direct message partner"
+]);
+
+function displayName(participant: SourceParticipant): string | null {
+  const name = participant.name.trim();
+  if (
+    !name ||
+    name === participant.provider_id ||
+    UNKNOWN_PARTICIPANT_NAMES.has(name)
+  ) {
+    return null;
+  }
+  return name;
+}
+
 export class MachineContextRepository {
   constructor(private readonly database: MachineDatabase) {}
 
@@ -139,7 +157,10 @@ export class MachineContextRepository {
              person_id, provider, external_id, display_name, payload_json, updated_at
            ) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(provider, external_id) DO UPDATE SET
-             display_name = excluded.display_name,
+             display_name = COALESCE(
+               excluded.display_name,
+               upstream_people.display_name
+             ),
              payload_json = excluded.payload_json,
              updated_at = excluded.updated_at`
         )
@@ -147,7 +168,7 @@ export class MachineContextRepository {
           personId,
           record.provider,
           participant.provider_id,
-          participant.name || null,
+          displayName(participant),
           encodeJson({ role: participant.role ?? null }),
           timestamp
         );
@@ -219,7 +240,39 @@ export class MachineContextRepository {
          ${options.limit !== undefined ? "LIMIT ?" : ""}`
       )
       .all(...parameters) as SourceRow[];
-    return rows.map((row) => this.hydrateSource(row));
+    if (!rows.length) return [];
+    const participantRows = this.database.connection
+      .prepare(
+        `SELECT participant.source_id, participant.provider_id,
+                participant.name, participant.role
+         FROM source_participants participant
+         JOIN (
+           SELECT id
+           FROM sources
+           ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
+           ORDER BY occurred_at ASC
+           ${options.limit !== undefined ? "LIMIT ?" : ""}
+         ) selected ON selected.id = participant.source_id
+         ORDER BY participant.source_id, participant.position`
+      )
+      .all(...parameters) as Array<{
+        source_id: string;
+        provider_id: string;
+        name: string;
+        role: SourceParticipant["role"] | null;
+      }>;
+    const participantsBySource = new Map<string, SourceParticipant[]>();
+    for (const { source_id, role, ...participant } of participantRows) {
+      const participants = participantsBySource.get(source_id) ?? [];
+      participants.push({
+        ...participant,
+        ...(role ? { role } : {})
+      });
+      participantsBySource.set(source_id, participants);
+    }
+    return rows.map((row) =>
+      this.hydrateSource(row, participantsBySource.get(row.id) ?? [])
+    );
   }
 
   markAnalyzed(
@@ -306,19 +359,27 @@ export class MachineContextRepository {
     }));
   }
 
-  private hydrateSource(row: SourceRow): StoredSource {
-    const participants = this.database.connection
-      .prepare(
-        `SELECT provider_id, name, role
-         FROM source_participants
-         WHERE source_id = ?
-         ORDER BY position`
-      )
-      .all(row.id) as Array<{
-        provider_id: string;
-        name: string;
-        role: SourceParticipant["role"] | null;
-      }>;
+  private hydrateSource(
+    row: SourceRow,
+    prefetchedParticipants?: SourceParticipant[]
+  ): StoredSource {
+    const participants = prefetchedParticipants ?? (
+      this.database.connection
+        .prepare(
+          `SELECT provider_id, name, role
+           FROM source_participants
+           WHERE source_id = ?
+           ORDER BY position`
+        )
+        .all(row.id) as Array<{
+          provider_id: string;
+          name: string;
+          role: SourceParticipant["role"] | null;
+        }>
+    ).map(({ role, ...participant }) => ({
+      ...participant,
+      ...(role ? { role } : {})
+    }));
     return {
       id: row.id,
       provider: row.provider,
@@ -328,10 +389,7 @@ export class MachineContextRepository {
       body: row.body,
       bodyHash: row.body_hash,
       occurredAt: row.occurred_at,
-      participants: participants.map(({ role, ...participant }) => ({
-        ...participant,
-        ...(role ? { role } : {})
-      })),
+      participants,
       metadata: decodeJson<Record<string, unknown>>(row.metadata_json),
       analyzedAt: row.analyzed_at,
       bodyPurgedAt: row.body_purged_at,

@@ -16,6 +16,18 @@ import type { ContextIndex } from "../core/index";
 
 const MACHINE_SOURCE_PATH_PREFIX = ".context/machine/sources";
 const MACHINE_CANDIDATE_PATH_PREFIX = ".context/machine/candidates";
+const UNKNOWN_PERSON_NAMES = new Set([
+  "Unknown",
+  "Lark user",
+  "Direct message partner"
+]);
+
+function isUnknownPersonName(
+  name: string | null | undefined,
+  externalId: string
+): boolean {
+  return !name || name === externalId || UNKNOWN_PERSON_NAMES.has(name);
+}
 
 function sourceDocument(source: StoredSource): WorkspaceDocument<SourceMetadata> {
   return {
@@ -116,11 +128,30 @@ function mergeUpstreamIdentity(
   if (!person || document.data.type !== "person") return document;
   const current = document as WorkspaceDocument<PersonMetadata>;
   const identityKey = `${person.provider}\u0000${person.externalId}`;
-  const identities = current.data.identities.some(
+  const hasIdentity = current.data.identities.some(
     ({ provider, external_id }) =>
       `${provider}\u0000${external_id}` === identityKey
-  )
-    ? current.data.identities
+  );
+  const identities = hasIdentity
+    ? current.data.identities.map((identity) => {
+        if (
+          `${identity.provider}\u0000${identity.external_id}` !== identityKey
+        ) {
+          return identity;
+        }
+        const { display_name, ...stableIdentity } = identity;
+        const resolvedDisplayName =
+          person.displayName ??
+          (isUnknownPersonName(display_name, person.externalId)
+            ? null
+            : display_name);
+        return {
+          ...stableIdentity,
+          ...(resolvedDisplayName
+            ? { display_name: resolvedDisplayName }
+            : {})
+        };
+      })
     : [
         ...current.data.identities,
         {
@@ -133,6 +164,9 @@ function mergeUpstreamIdentity(
     ...current,
     data: {
       ...current.data,
+      title: isUnknownPersonName(current.data.title, person.externalId)
+        ? person.displayName ?? person.externalId
+        : current.data.title,
       identities
     }
   };
@@ -153,13 +187,22 @@ export class ContextQueryService {
     private readonly analysis: AnalysisResultRepository
   ) {}
 
-  all(): WorkspaceDocument[] {
-    const upstreamPeople = this.machine.listUpstreamPeople();
+  all(options: {
+    type?: string;
+    status?: string;
+    direction?: string;
+  } = {}): WorkspaceDocument[] {
+    const includePeople = !options.type || options.type === "person";
+    const includeSources = !options.type || options.type === "source";
+    const includeCandidates = !options.type || options.type === "candidate";
+    const upstreamPeople = includePeople
+      ? this.machine.listUpstreamPeople()
+      : [];
     const upstreamById = new Map(
       upstreamPeople.map((person) => [person.personId, person])
     );
     const humanDocuments = this.markdown
-      .all()
+      .all({ type: options.type, status: options.status })
       .filter(
         ({ data }) =>
           data.type !== "person" ||
@@ -169,18 +212,29 @@ export class ContextQueryService {
         mergeUpstreamIdentity(document, upstreamById.get(document.data.id))
       );
     const humanIds = new Set(humanDocuments.map(({ data }) => data.id));
-    const candidates = this.analysis
-      .listCandidates(null)
-      .filter(({ status }) => status === "proposed" || status === "pending")
-      .map(candidateDocument);
+    const candidates = includeCandidates
+      ? this.analysis
+          .listCandidates(null)
+          .filter(({ status }) => status === "proposed" || status === "pending")
+          .map(candidateDocument)
+      : [];
     return [
       ...humanDocuments,
-      ...this.machine.listSources().map(sourceDocument),
+      ...(includeSources ? this.machine.listSources().map(sourceDocument) : []),
       ...upstreamPeople
         .filter(({ personId }) => !humanIds.has(personId))
         .map(upstreamPersonDocument),
       ...candidates
-    ];
+    ]
+      .filter(
+        ({ data }) => !options.status || data.status === options.status
+      )
+      .filter(
+        ({ data }) =>
+          !options.direction ||
+          (data.type === "todo" &&
+            (data as { direction?: string }).direction === options.direction)
+      );
   }
 
   byId(id: string): WorkspaceDocument | undefined {

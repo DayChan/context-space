@@ -241,6 +241,67 @@ export const MACHINE_MIGRATIONS: readonly MachineMigration[] = [
     sql: `
       ALTER TABLE analysis_runs ADD COLUMN duration_ms INTEGER;
     `
+  },
+  {
+    version: 3,
+    name: "repair-upstream-person-display-names",
+    sql: `
+      CREATE INDEX source_participants_provider_idx
+        ON source_participants(provider_id);
+
+      UPDATE upstream_people AS person
+      SET display_name = (
+        SELECT participant.name
+        FROM source_participants participant
+        JOIN sources source ON source.id = participant.source_id
+        WHERE participant.provider_id = person.external_id
+          AND participant.name <> participant.provider_id
+          AND participant.name NOT IN (
+            'Unknown',
+            'Lark user',
+            'Direct message partner'
+          )
+        ORDER BY source.occurred_at DESC
+        LIMIT 1
+      )
+      WHERE (
+        person.display_name IS NULL
+        OR person.display_name = person.external_id
+        OR person.display_name IN (
+          'Unknown',
+          'Lark user',
+          'Direct message partner'
+        )
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM source_participants participant
+        WHERE participant.provider_id = person.external_id
+          AND participant.name <> participant.provider_id
+          AND participant.name NOT IN (
+            'Unknown',
+            'Lark user',
+            'Direct message partner'
+          )
+      );
+
+      UPDATE upstream_people
+      SET display_name = NULL
+      WHERE display_name = external_id
+         OR display_name IN (
+           'Unknown',
+           'Lark user',
+           'Direct message partner'
+         );
+
+      UPDATE source_participants
+      SET name = provider_id
+      WHERE name IN (
+        'Unknown',
+        'Lark user',
+        'Direct message partner'
+      );
+    `
   }
 ];
 

@@ -525,6 +525,30 @@ describe("read-only Lark adapter", () => {
     expect(records.map(({ sourceId }) => sourceId)).toEqual(["lark:task:task_open"]);
   });
 
+  it("uses the stable partner id when a P2P result omits the display name", () => {
+    const [record] = normalizeMessages(
+      {
+        messages: [
+          {
+            message_id: "missing_partner_name",
+            content: "{\"text\":\"你好\"}",
+            sender: { id: "ou_self", name: "Me" },
+            partner: { open_id: "ou_partner" }
+          }
+        ]
+      },
+      "p2p"
+    );
+    expect(record.participants).toEqual([
+      { provider_id: "ou_self", name: "Me", role: "sender" },
+      {
+        provider_id: "ou_partner",
+        name: "ou_partner",
+        role: "partner"
+      }
+    ]);
+  });
+
   it("discards bot senders and entire bot P2P conversations", async () => {
     expect(
       normalizeMessages(

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AnalysisProvider,
   ProviderAnalysisResponse
@@ -14,6 +14,7 @@ import type {
   PersonMetadata,
   SourceMetadata
 } from "../src/core/types";
+import { personIdForIdentity } from "../src/core/people";
 import {
   createConfiguredLogger,
   type Logger,
@@ -543,6 +544,72 @@ describe("local API", () => {
         body: expect.stringContaining("汇总阻塞项")
       })
     ]);
+  });
+
+  it("lists people and knowledge without loading the source collection", async () => {
+    const timestamp = "2026-07-20T00:00:00.000Z";
+    const externalId = "ou_person_list";
+    context.runtime.machineContext.upsertSource({
+      ...machineSource(
+        "lark:message:person_list",
+        "p2p",
+        timestamp,
+        "Hello"
+      ),
+      participants: [
+        {
+          provider_id: externalId,
+          name: "List Person",
+          role: "partner"
+        }
+      ]
+    });
+    await context.runtime.store.write(
+      "people/person_list.md",
+      {
+        schema: "work-context/person@1",
+        id: personIdForIdentity("lark", externalId),
+        type: "person",
+        title: "Direct message partner",
+        managed: "hybrid",
+        created_at: timestamp,
+        updated_at: timestamp,
+        source_refs: [],
+        identities: [
+          {
+            provider: "lark",
+            external_id: externalId,
+            display_name: "Direct message partner"
+          }
+        ],
+        role: null,
+        role_origin: null,
+        is_leader: false,
+        leader_boost: 20,
+        observations: [],
+        last_interaction_at: timestamp
+      },
+      ""
+    );
+    await context.runtime.index.rebuild(context.runtime.store);
+    const listSources = vi.spyOn(
+      context.runtime.machineContext,
+      "listSources"
+    );
+
+    const people = await request(context.app)
+      .get("/api/documents?type=person")
+      .expect(200);
+    await request(context.app)
+      .get("/api/documents?type=knowledge")
+      .expect(200);
+
+    expect(people.body).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ title: "List Person" })
+      })
+    ]);
+    expect(listSources).not.toHaveBeenCalled();
   });
 
   it("updates explicit Leader configuration", async () => {

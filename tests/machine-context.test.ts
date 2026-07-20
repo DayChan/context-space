@@ -84,6 +84,52 @@ describe("machine context repositories", () => {
     expect(context.countUpstreamPeople()).toBe(2);
   });
 
+  it("does not let an unknown participant name overwrite a real name", () => {
+    context.upsertSource(source("lark:message:named"));
+    context.upsertSource(
+      source("lark:message:unknown", {
+        participants: [
+          {
+            provider_id: "ou_partner",
+            name: "ou_partner",
+            role: "partner"
+          }
+        ]
+      })
+    );
+    expect(context.listUpstreamPeople()).toEqual([
+      expect.objectContaining({
+        externalId: "ou_partner",
+        displayName: "Partner"
+      })
+    ]);
+  });
+
+  it("hydrates participants when listing multiple sources", () => {
+    context.upsertSource(source("lark:message:first"));
+    context.upsertSource(
+      source("lark:message:second", {
+        participants: [
+          { provider_id: "ou_second", name: "Second", role: "sender" }
+        ]
+      })
+    );
+    expect(context.listSources()).toEqual([
+      expect.objectContaining({
+        id: "lark:message:first",
+        participants: [
+          expect.objectContaining({ provider_id: "ou_partner" })
+        ]
+      }),
+      expect.objectContaining({
+        id: "lark:message:second",
+        participants: [
+          expect.objectContaining({ provider_id: "ou_second" })
+        ]
+      })
+    ]);
+  });
+
   it("stores independent source cursors and sync results", () => {
     const sync = new SyncRepository(database);
     sync.startRun("sync_1", "2026-07-20T00:00:00.000Z");

@@ -66,7 +66,7 @@ function contentText(value: unknown): string {
 function participant(
   value: unknown,
   role: SourceParticipant["role"],
-  fallbackName = "Unknown"
+  fallbackName?: string
 ): SourceParticipant | null {
   const entry = object(value);
   const id = firstString(entry.id, entry.open_id, entry.user_id, entry.sender_id);
@@ -103,11 +103,11 @@ export function normalizeMessages(payload: unknown, kind: "mention" | "p2p"): No
       sender_type:
         object(message.sender).sender_type ?? message.sender_type
     };
+    const partnerValue = message.chat_partner ?? message.partner ?? message.peer;
     const partnerActor: Record<string, unknown> = {
-      ...object(message.chat_partner ?? message.partner ?? message.peer),
+      ...object(partnerValue),
       actor_type:
-        object(message.chat_partner ?? message.partner ?? message.peer)
-          .actor_type ??
+        object(partnerValue).actor_type ??
         message.chat_partner_type ??
         message.partner_type ??
         message.peer_type
@@ -119,7 +119,7 @@ export function normalizeMessages(payload: unknown, kind: "mention" | "p2p"): No
       return [];
     }
     const sender = participant(message.sender, "sender", "Lark user");
-    const partner = participant(message.chat_partner, "partner", "Direct message partner");
+    const partner = participant(partnerValue, "partner");
     const participants = [sender, partner].filter(Boolean) as SourceParticipant[];
     const text = contentText(message.content ?? message.body);
     return [
