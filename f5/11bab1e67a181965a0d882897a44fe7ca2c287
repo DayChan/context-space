@@ -1,0 +1,31 @@
+src/core/markdown-store.ts
+  s_9a2d24a49d1051::t_40771365bfec4c 122-148
+src/server/app.ts
+  s_9a2d24a49d1051::t_df27b2960162f1 32,67-77,122-125,153-158,172-195,201,205-215,368-378,430-504
+src/web/App.tsx
+  s_9a2d24a49d1051::t_b0de645da4543c 10,19,72-77,435-443,459,617-636,640,643-671,673,682-688,690-696,701,703,706-707,709,714,933-934,936-959,991-993,995-1009,1197-1263,1305-1306,1438-1450,1452-1475
+src/web/styles.css
+  s_9a2d24a49d1051::t_d993e5a3369bb8 190,195-199,310-324,326-327,331-333,368-372
+tests/api.test.ts
+  s_9a2d24a49d1051::t_076eedb18c3714 12-16,146-219,238-244,253,267-271,275-302,304
+tests/frontend.test.tsx
+  s_9a2d24a49d1051::t_e0cb1f51f9a38b 8,97-124,154-160,164,216-230,246-266,289-301,318-323,334-343,371-388,394-396,402-405,418,427-431,483-504
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f511bab1e67a181965a0d882897a44fe7ca2c287",
+  "prompts": {},
+  "sessions": {
+    "s_9a2d24a49d1051": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7eeb-f0ad-7c62-81f3-0abdc39b8d39",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
