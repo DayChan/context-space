@@ -166,6 +166,16 @@ const overview: Overview = {
   counts: { todos: 2, people: 1, knowledge: 0, inbox: 0 }
 };
 
+const timelineItems: TodoMetadata[] = Array.from(
+  { length: 21 },
+  (_, index) => ({
+    ...owedTodo,
+    id: `timeline_item_${index + 1}`,
+    title: `Timeline item ${index + 1}`,
+    updated_at: `2026-07-${String(20 - Math.floor(index / 2)).padStart(2, "0")}T${String(23 - (index % 2)).padStart(2, "0")}:00:00Z`
+  })
+);
+
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -307,6 +317,21 @@ beforeEach(() => {
       }
       if (url === "/api/config") return jsonResponse(configResponse());
       if (url.startsWith("/api/overview")) return jsonResponse(overview);
+      if (url.startsWith("/api/timeline")) {
+        const parsed = new URL(url, "http://context-space.local");
+        const page = Number(parsed.searchParams.get("page") ?? "1");
+        const pageSize = Number(parsed.searchParams.get("page_size") ?? "20");
+        const pageStart = (page - 1) * pageSize;
+        return jsonResponse({
+          items: timelineItems.slice(pageStart, pageStart + pageSize),
+          pagination: {
+            page,
+            page_size: pageSize,
+            total: timelineItems.length,
+            total_pages: Math.ceil(timelineItems.length / pageSize)
+          }
+        });
+      }
       if (url.startsWith("/api/documents?type=todo")) {
         return jsonResponse([
           { path: "todos/owed.md", data: { ...owedTodo, status: owedTodoStatus }, body: "", etag: "1" },
@@ -407,6 +432,22 @@ describe("Context Space workbench", () => {
     await user.type(search, "阻塞项");
     expect(screen.getByText("Alice")).toBeInTheDocument();
     expect(screen.queryByText("Bob")).not.toBeInTheDocument();
+  });
+
+  it("paginates Timeline and gives the time column enough structure", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/timeline"]}><AppView /></MemoryRouter>);
+    const firstItem = await screen.findByText("Timeline item 1");
+    expect(screen.queryByText("Timeline item 21")).not.toBeInTheDocument();
+    expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument();
+    expect(
+      firstItem.closest(".timeline-item")?.firstElementChild
+    ).toHaveClass("timeline-time");
+
+    await user.click(screen.getByRole("button", { name: "下一页 Timeline" }));
+    expect(await screen.findByText("Timeline item 21")).toBeInTheDocument();
+    expect(screen.queryByText("Timeline item 1")).not.toBeInTheDocument();
+    expect(screen.getByText(/第 2 \/ 2 页/)).toBeInTheDocument();
   });
 
   it("filters Todo items waiting on another person", async () => {

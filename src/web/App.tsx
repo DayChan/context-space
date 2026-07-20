@@ -840,23 +840,64 @@ function KnowledgePage() {
   );
 }
 
+interface TimelineResponse {
+  items: BaseMetadata[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total: number;
+    total_pages: number;
+  };
+}
+
 function TimelinePage() {
-  const { data, loading, error } = useApi<BaseMetadata[]>("/api/timeline", []);
+  const [page, setPage] = useState(1);
+  const { data, loading, error } = useApi<TimelineResponse>(
+    `/api/timeline?page=${page}&page_size=20`,
+    {
+      items: [],
+      pagination: { page: 1, page_size: 20, total: 0, total_pages: 1 }
+    }
+  );
   return (
     <>
-      <PageHeader eyebrow="Source of truth" title="Timeline" description="从原始上下文到派生知识，按更新时间查看可追溯链路。" />
+      <PageHeader eyebrow="Source of truth" title="Timeline" description="从群聊上下文到派生知识，按更新时间查看可追溯链路。" />
       <ErrorBanner message={error} />
       <div className="timeline">
-        {data.map((item) => (
+        {data.items.map((item) => (
           <Link key={item.id} className="timeline-item" to={`/documents/${encodeURIComponent(item.id)}`}>
-            <span className={`timeline-dot type-${item.type}`} />
             <div className="timeline-time">{formatDate(item.updated_at)}</div>
+            <span className={`timeline-dot type-${item.type}`} />
             <div className="timeline-content"><Badge>{item.type}</Badge><strong>{item.title}</strong><small>{item.source_refs.length} source refs</small></div>
             <ChevronRight size={16} />
           </Link>
         ))}
       </div>
-      {!data.length && <EmptyState icon={Activity} title={loading ? "正在加载…" : "还没有时间线"} description="同步后的来源与派生内容会按时间串联。" />}
+      {data.pagination.total_pages > 1 && (
+        <div className="provenance-pagination timeline-pagination">
+          <button
+            aria-label="上一页 Timeline"
+            disabled={data.pagination.page <= 1}
+            onClick={() => setPage(data.pagination.page - 1)}
+            type="button"
+          >
+            <ChevronLeft size={14} />上一页
+          </button>
+          <span>
+            第 {data.pagination.page} / {data.pagination.total_pages} 页
+            · 共 {data.pagination.total} 条
+          </span>
+          <button
+            aria-label="下一页 Timeline"
+            disabled={data.pagination.page >= data.pagination.total_pages}
+            onClick={() => setPage(data.pagination.page + 1)}
+            type="button"
+          >
+            下一页<ChevronRight size={14} />
+          </button>
+        </div>
+      )}
+      {!data.items.length && <EmptyState icon={Activity} title={loading ? "正在加载…" : "还没有时间线"} description="同步后的群聊来源与派生内容会按时间串联。" />}
     </>
   );
 }

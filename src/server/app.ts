@@ -75,6 +75,11 @@ const provenancePaginationSchema = z.object({
   provenance_page_size: z.coerce.number().int().min(1).max(50).default(10)
 });
 
+const timelinePaginationSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  page_size: z.coerce.number().int().min(1).max(100).default(20)
+});
+
 const reanalysisRangeSchema = z
   .object({
     from: z.string().datetime({ offset: true }),
@@ -508,8 +513,22 @@ export async function createApp(options: CreateAppOptions): Promise<{
     response.json(index.search(query, type));
   });
 
-  app.get("/api/timeline", (_request, response) => {
-    response.json(buildTimeline(index.all()));
+  app.get("/api/timeline", (request, response) => {
+    const pagination = timelinePaginationSchema.parse(request.query);
+    const timeline = buildTimeline(index.all());
+    const total = timeline.length;
+    const totalPages = Math.max(1, Math.ceil(total / pagination.page_size));
+    const page = Math.min(pagination.page, totalPages);
+    const pageStart = (page - 1) * pagination.page_size;
+    response.json({
+      items: timeline.slice(pageStart, pageStart + pagination.page_size),
+      pagination: {
+        page,
+        page_size: pagination.page_size,
+        total,
+        total_pages: totalPages
+      }
+    });
   });
 
   app.get("/api/config", async (_request, response) => {

@@ -97,6 +97,11 @@ export function buildOverview(
 export function buildTimeline(documents: WorkspaceDocument[]): BaseMetadata[] {
   return documents
     .filter((document) => ["source", "todo", "candidate", "knowledge"].includes(document.data.type))
+    .filter(
+      (document) =>
+        document.data.type !== "source" ||
+        (document.data as SourceMetadata).source_kind !== "p2p"
+    )
     .map((document) => document.data)
     .sort(byUpdatedDescending);
 }

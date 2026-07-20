@@ -106,6 +106,70 @@ describe("local API", () => {
     await request(context.app).post("/api/loop/execute").send({ todo: "x" }).expect(404);
   });
 
+  it("paginates Timeline and excludes P2P direct messages", async () => {
+    const timestamp = "2026-07-20T00:00:00.000Z";
+    const source = (
+      id: string,
+      sourceKind: SourceMetadata["source_kind"],
+      updatedAt: string
+    ): SourceMetadata => ({
+      schema: "work-context/source@1",
+      id,
+      type: "source",
+      title: sourceKind === "p2p" ? "Direct message" : "Group mention",
+      managed: "generated",
+      created_at: timestamp,
+      updated_at: updatedAt,
+      source_refs: [],
+      provider: "lark",
+      source_kind: sourceKind,
+      source_id: id,
+      occurred_at: updatedAt,
+      participants: [],
+      provider_metadata: {}
+    });
+    await context.runtime.store.write(
+      "sources/lark/dms/alice/timeline_p2p.md",
+      source("lark:message:timeline_p2p", "p2p", "2026-07-20T03:00:00.000Z"),
+      "# Direct message"
+    );
+    await context.runtime.store.write(
+      "sources/lark/mentions/2026/07/timeline_mention.md",
+      source("lark:message:timeline_mention", "mention", "2026-07-20T02:00:00.000Z"),
+      "# Group mention"
+    );
+    await context.runtime.store.write(
+      "todos/items/timeline_todo.md",
+      createTodoMetadata({
+        id: "timeline_todo",
+        title: "Timeline Todo",
+        updated_at: "2026-07-20T01:00:00.000Z"
+      }),
+      "# Timeline Todo"
+    );
+    await context.runtime.index.rebuild(context.runtime.store);
+
+    const firstPage = await request(context.app)
+      .get("/api/timeline?page=1&page_size=1")
+      .expect(200);
+    expect(firstPage.body.pagination).toEqual({
+      page: 1,
+      page_size: 1,
+      total: 2,
+      total_pages: 2
+    });
+    expect(firstPage.body.items).toHaveLength(1);
+    expect(firstPage.body.items[0].id).toBe("lark:message:timeline_mention");
+    expect(
+      JSON.stringify(firstPage.body)
+    ).not.toContain("timeline_p2p");
+
+    const secondPage = await request(context.app)
+      .get("/api/timeline?page=2&page_size=1")
+      .expect(200);
+    expect(secondPage.body.items[0].id).toBe("timeline_todo");
+  });
+
   it("uses optimistic concurrency for editable documents", async () => {
     const todo = createTodoMetadata({ id: "todo_api", title: "API Todo" });
     await context.runtime.store.write("todos/items/todo_api.md", todo, "# Original");
