@@ -31,7 +31,9 @@ import type {
   BaseMetadata,
   LeaderConfig,
   PersonMetadata,
+  SourceMetadata,
   TodoMetadata,
+  TodoStatus,
   WorkspaceDocument
 } from "../core/types";
 import { nowIso } from "../core/types";
@@ -54,6 +56,12 @@ const updateSchema = z.object({
   data: z.record(z.string(), z.unknown()),
   body: z.string()
 });
+
+const todoStatusSchema = z
+  .object({
+    status: z.enum(["open", "done"])
+  })
+  .strict();
 
 const reanalysisRangeSchema = z
   .object({
@@ -140,9 +148,27 @@ async function apiDocument(
   if (isPerson(document)) {
     const todos = runtime.index.all<TodoMetadata>().filter(isTodo);
     const relationships = commitmentsForPerson(document.data.id, todos);
+    const sourceReferences = new Set([
+      ...document.data.source_refs,
+      ...document.data.observations.flatMap(
+        (observation) => observation.source_refs ?? []
+      )
+    ]);
+    const provenanceSources = [...sourceReferences].flatMap((reference) => {
+      const source = runtime.index.byId<SourceMetadata>(reference);
+      if (!source || source.data.type !== "source") return [];
+      return [{
+        id: source.data.id,
+        title: source.data.title,
+        body: source.body,
+        occurred_at: source.data.occurred_at,
+        source_kind: source.data.source_kind
+      }];
+    });
     return {
       ...document,
       data: applyLeaderConfiguration(document.data, leaders),
+      provenanceSources,
       relationships: {
         owedByMe: relationships.owedByMe.map(({ data }) => data),
         waitingOnThem: relationships.waitingOnThem.map(({ data }) => data),
@@ -328,6 +354,25 @@ export async function createApp(options: CreateAppOptions): Promise<{
     response.json(saved);
   });
 
+  app.patch("/api/todos/:id/status", async (request, response) => {
+    const input = todoStatusSchema.parse(request.body);
+    const existing = index.byId<TodoMetadata>(request.params.id);
+    if (!existing || existing.data.type !== "todo") {
+      response.status(404).json({ error: "Todo not found" });
+      return;
+    }
+    const data: TodoMetadata = {
+      ...existing.data,
+      status: input.status as TodoStatus,
+      updated_at: nowIso()
+    };
+    const saved = await store.write(existing.path, data, existing.body, {
+      expectedEtag: existing.etag
+    });
+    await index.rebuild(store);
+    response.json(await apiDocument(saved, runtime, await runtime.getLeaders()));
+  });
+
   app.get("/api/search", (request, response) => {
     const query = typeof request.query.q === "string" ? request.query.q : "";
     const type = typeof request.query.type === "string" ? request.query.type : undefined;
@@ -460,6 +505,10 @@ export async function createApp(options: CreateAppOptions): Promise<{
     } catch (error) {
       next(error);
     }
+  });
+
+  app.get("/api/sync/lark/status", (_request, response) => {
+    response.json(sync.getStatus());
   });
 
   app.get("/api/loop", async (_request, response) => {

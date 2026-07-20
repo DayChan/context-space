@@ -12,10 +12,33 @@ export type LarkSyncSource = SyncSourceResult["source"];
 export interface FetchResult {
   records: NormalizedSourceRecord[];
   result: SyncSourceResult;
+  pagination: {
+    hasMore: boolean;
+    nextPageToken?: string;
+  };
 }
 
 function iso(value: Date): string {
   return value.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function paginationFrom(payload: unknown): FetchResult["pagination"] {
+  const root =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {};
+  const nested =
+    root.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? (root.data as Record<string, unknown>)
+      : root;
+  const token =
+    typeof nested.page_token === "string" && nested.page_token.trim()
+      ? nested.page_token
+      : undefined;
+  return {
+    hasMore: nested.has_more === true,
+    ...(token ? { nextPageToken: token } : {})
+  };
 }
 
 export function splitWindows(start: Date, end: Date, windowDays = 7): Array<{ start: Date; end: Date }> {
@@ -35,7 +58,12 @@ export function splitWindows(start: Date, end: Date, windowDays = 7): Array<{ st
 export class LarkAdapter {
   constructor(private readonly runner: CommandRunner) {}
 
-  async fetchSource(source: LarkSyncSource, start: Date, end: Date): Promise<FetchResult> {
+  async fetchSource(
+    source: LarkSyncSource,
+    start: Date,
+    end: Date,
+    pageToken?: string
+  ): Promise<FetchResult> {
     const baseResult: SyncSourceResult = {
       source,
       ok: false,
@@ -49,7 +77,7 @@ export class LarkAdapter {
         payload = await this.runner.run(["contact", "+get-user"]);
         records = normalizeSelf(payload);
       } else if (source === "mentions") {
-        payload = await this.runner.run([
+        const args = [
           "im",
           "+messages-search",
           "--is-at-me",
@@ -59,11 +87,17 @@ export class LarkAdapter {
           iso(end),
           "--page-size",
           "50",
-          "--page-all"
-        ]);
+          "--page-limit",
+          "1",
+          "--exclude-sender-type",
+          "bot",
+          "--no-reactions"
+        ];
+        if (pageToken) args.push("--page-token", pageToken);
+        payload = await this.runner.run(args);
         records = normalizeMessages(payload, "mention");
       } else if (source === "p2p") {
-        payload = await this.runner.run([
+        const args = [
           "im",
           "+messages-search",
           "--chat-type",
@@ -74,8 +108,14 @@ export class LarkAdapter {
           iso(end),
           "--page-size",
           "50",
-          "--page-all"
-        ]);
+          "--page-limit",
+          "1",
+          "--exclude-sender-type",
+          "bot",
+          "--no-reactions"
+        ];
+        if (pageToken) args.push("--page-token", pageToken);
+        payload = await this.runner.run(args);
         records = normalizeMessages(payload, "p2p");
       } else if (source === "calendar") {
         payload = await this.runner.run([
@@ -98,6 +138,10 @@ export class LarkAdapter {
       }
       return {
         records,
+        pagination:
+          source === "mentions" || source === "p2p"
+            ? paginationFrom(payload)
+            : { hasMore: false },
         result: {
           ...baseResult,
           ok: true,
@@ -109,6 +153,7 @@ export class LarkAdapter {
       const issue = error instanceof LarkCliCommandError ? error.issue : undefined;
       return {
         records: [],
+        pagination: { hasMore: false },
         result: {
           ...baseResult,
           error: error instanceof Error ? error.message : String(error),

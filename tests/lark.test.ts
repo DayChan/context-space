@@ -11,7 +11,10 @@ import type {
 } from "../src/analysis/contracts";
 import { AnalysisProviderRegistry } from "../src/analysis/providers/registry";
 import { LarkAdapter } from "../src/adapters/lark/adapter";
-import { normalizeTasks } from "../src/adapters/lark/normalize";
+import {
+  normalizeMessages,
+  normalizeTasks
+} from "../src/adapters/lark/normalize";
 import {
   assertReadOnlyLarkCommand,
   LarkCliCommandError,
@@ -184,6 +187,48 @@ class FakeRunner implements CommandRunner {
   }
 }
 
+class PaginatedP2PRunner extends FakeRunner {
+  constructor(
+    private readonly pageCount: number,
+    private readonly failAtPage?: number
+  ) {
+    super();
+  }
+
+  override async run(args: string[]): Promise<unknown> {
+    if (
+      args[0] !== "im" ||
+      args[1] !== "+messages-search" ||
+      !args.includes("p2p")
+    ) {
+      return super.run(args);
+    }
+    this.calls.push(args);
+    const tokenIndex = args.indexOf("--page-token");
+    const page =
+      tokenIndex >= 0 ? Number(args[tokenIndex + 1].replace("page_", "")) : 0;
+    if (page === this.failAtPage) {
+      throw new Error(`simulated page ${page} failure`);
+    }
+    const hasMore = page + 1 < this.pageCount;
+    return {
+      messages: [
+        {
+          message_id: `om_p2p_${page}`,
+          content: JSON.stringify({ text: `P2P page ${page}` }),
+          create_time: String(1784476800000 + page),
+          sender: { id: "ou_alice", name: "Alice" },
+          chat_partner: { open_id: "ou_alice", name: "Alice" },
+          chat_name: "Alice",
+          chat_type: "p2p"
+        }
+      ],
+      has_more: hasMore,
+      ...(hasMore ? { page_token: `page_${page + 1}` } : {})
+    };
+  }
+}
+
 describe("read-only Lark adapter", () => {
   let root: string;
 
@@ -207,19 +252,21 @@ describe("read-only Lark adapter", () => {
     );
   });
 
-  it("uses second-precision windows and requests only incomplete tasks", async () => {
+  it("uses second-precision single-page message commands and requests only incomplete tasks", async () => {
     const runner = new FakeRunner();
     const adapter = new LarkAdapter(runner);
     const start = new Date("2026-06-20T07:02:23.616Z");
     const end = new Date("2026-06-27T07:02:23.616Z");
 
     await adapter.fetchSource("mentions", start, end);
+    await adapter.fetchSource("mentions", start, end, "next_page");
     await adapter.fetchSource("calendar", start, end);
     await adapter.fetchSource("tasks", start, end);
 
-    const mentions = runner.calls.find(
+    const messageCalls = runner.calls.filter(
       ([service, command]) => service === "im" && command === "+messages-search"
     );
+    const mentions = messageCalls[0];
     const calendar = runner.calls.find(
       ([service, command]) => service === "calendar" && command === "+agenda"
     );
@@ -234,6 +281,21 @@ describe("read-only Lark adapter", () => {
         "2026-06-27T07:02:23Z"
       ])
     );
+    expect(mentions).toEqual(
+      expect.arrayContaining([
+        "--page-size",
+        "50",
+        "--page-limit",
+        "1",
+        "--exclude-sender-type",
+        "bot",
+        "--no-reactions"
+      ])
+    );
+    expect(mentions).not.toContain("--page-all");
+    expect(messageCalls[1]).toEqual(
+      expect.arrayContaining(["--page-token", "next_page"])
+    );
     expect(calendar).toEqual(
       expect.arrayContaining([
         "--start",
@@ -243,6 +305,189 @@ describe("read-only Lark adapter", () => {
       ])
     );
     expect(tasks).toEqual(expect.arrayContaining(["--complete=false", "--page-all"]));
+  });
+
+  it("continues P2P collection beyond forty pages and keeps page tokens out of logs", async () => {
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const logs = memoryLogger(root);
+    const runner = new PaginatedP2PRunner(41);
+    const sync = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(runner),
+      createAnalysis(store, index, undefined, logs.logger),
+      logs.logger
+    );
+
+    const status = await sync.sync({
+      now: new Date("2026-07-20T12:00:00Z"),
+      backfillDays: 1,
+      windowDays: 1,
+      maxMessagePagesPerWindow: 50
+    });
+
+    const p2p = status.results.find((result) => result.source === "p2p");
+    expect(p2p).toMatchObject({ ok: true, received: 41, persisted: 41 });
+    const p2pCalls = runner.calls.filter((args) => args.includes("p2p"));
+    expect(p2pCalls).toHaveLength(41);
+    expect(p2pCalls.every((args) => !args.includes("--page-all"))).toBe(true);
+    expect(p2pCalls.every((args) => args.includes("--no-reactions"))).toBe(true);
+    expect(index.search("", "source").filter(({ id }) => id.startsWith("lark:message:om_p2p_"))).toHaveLength(41);
+    await logs.logger.flush();
+    expect(logs.entries).toContainEqual(
+      expect.objectContaining({
+        event: "lark.sync.page.completed",
+        source: "p2p",
+        page_index: 40,
+        has_more: false
+      })
+    );
+    expect(JSON.stringify(logs.entries)).not.toContain("page_40");
+  });
+
+  it("keeps successful pages and safely replays an interrupted P2P window", async () => {
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const analysis = createAnalysis(store, index);
+    const failedSync = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(new PaginatedP2PRunner(3, 1)),
+      analysis
+    );
+    const options = {
+      now: new Date("2026-07-20T12:00:00Z"),
+      backfillDays: 1,
+      windowDays: 1,
+      maxMessagePagesPerWindow: 10
+    };
+
+    const failed = await failedSync.sync(options);
+    expect(failed.results.find(({ source }) => source === "p2p")).toMatchObject({
+      ok: false,
+      received: 1,
+      persisted: 1
+    });
+    expect(index.byId("lark:message:om_p2p_0")).toBeDefined();
+    const failedCheckpoint = await store.read(".context/sync/lark.md");
+    expect(
+      (failedCheckpoint.data.source_checkpoints as Record<string, unknown>).p2p
+    ).toBeUndefined();
+
+    const replayedSync = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(new PaginatedP2PRunner(3)),
+      analysis
+    );
+    const replayed = await replayedSync.sync(options);
+    expect(replayed.results.find(({ source }) => source === "p2p")).toMatchObject({
+      ok: true,
+      received: 3,
+      persisted: 2
+    });
+    expect(
+      index
+        .search("", "source")
+        .filter(({ id }) => id.startsWith("lark:message:om_p2p_"))
+    ).toHaveLength(3);
+    const completedCheckpoint = await store.read(".context/sync/lark.md");
+    expect(
+      (completedCheckpoint.data.source_checkpoints as Record<string, unknown>).p2p
+    ).toBeDefined();
+  });
+
+  it("rejects missing, repeated, and over-limit P2P pagination without advancing checkpoints", async () => {
+    const cases: Array<{
+      name: string;
+      maxPages: number;
+      response(page: number): Record<string, unknown>;
+      expectedCalls: number;
+      error: string;
+    }> = [
+      {
+        name: "missing-token",
+        maxPages: 10,
+        response: () => ({ has_more: true }),
+        expectedCalls: 1,
+        error: "未返回有效 page_token"
+      },
+      {
+        name: "repeated-token",
+        maxPages: 10,
+        response: () => ({ has_more: true, page_token: "same_token" }),
+        expectedCalls: 2,
+        error: "重复的 page_token"
+      },
+      {
+        name: "page-limit",
+        maxPages: 1,
+        response: () => ({ has_more: true, page_token: "next_token" }),
+        expectedCalls: 1,
+        error: "安全上限"
+      }
+    ];
+
+    for (const testCase of cases) {
+      const caseRoot = path.join(root, testCase.name);
+      const store = await initializeWorkspace(caseRoot);
+      const index = new ContextIndex();
+      await index.rebuild(store);
+      const base = new FakeRunner();
+      let p2pCalls = 0;
+      const runner: CommandRunner = {
+        async run(args) {
+          if (
+            args[0] !== "im" ||
+            args[1] !== "+messages-search" ||
+            !args.includes("p2p")
+          ) {
+            return base.run(args);
+          }
+          const page = p2pCalls++;
+          return {
+            messages: [
+              {
+                message_id: `om_${testCase.name}_${page}`,
+                content: JSON.stringify({ text: testCase.name }),
+                create_time: String(1784476800000 + page),
+                sender: { id: "ou_alice", name: "Alice" },
+                chat_partner: { open_id: "ou_alice", name: "Alice" },
+                chat_name: "Alice",
+                chat_type: "p2p"
+              }
+            ],
+            ...testCase.response(page)
+          };
+        }
+      };
+      const sync = new LarkSyncService(
+        store,
+        index,
+        new LarkAdapter(runner),
+        createAnalysis(store, index)
+      );
+
+      const status = await sync.sync({
+        now: new Date("2026-07-20T12:00:00Z"),
+        backfillDays: 1,
+        windowDays: 1,
+        maxMessagePagesPerWindow: testCase.maxPages
+      });
+      const p2p = status.results.find(({ source }) => source === "p2p");
+      expect(p2p?.ok, testCase.name).toBe(false);
+      expect(p2p?.error, testCase.name).toContain(testCase.error);
+      expect(p2p?.persisted, testCase.name).toBe(testCase.expectedCalls);
+      expect(p2pCalls, testCase.name).toBe(testCase.expectedCalls);
+      const checkpoint = await store.read(".context/sync/lark.md");
+      expect(
+        (checkpoint.data.source_checkpoints as Record<string, unknown>).p2p,
+        testCase.name
+      ).toBeUndefined();
+    }
   });
 
   it("defensively discards completed tasks returned by the upstream CLI", () => {
@@ -270,6 +515,182 @@ describe("read-only Lark adapter", () => {
       ]
     });
     expect(records.map(({ sourceId }) => sourceId)).toEqual(["lark:task:task_open"]);
+  });
+
+  it("discards bot senders and entire bot P2P conversations", async () => {
+    expect(
+      normalizeMessages(
+        {
+          messages: [
+            {
+              message_id: "bot_mention",
+              content: "{\"text\":\"机器人提醒\"}",
+              sender: { id: "bot_1", name: "Build Bot", type: "bot" }
+            }
+          ]
+        },
+        "mention"
+      )
+    ).toEqual([]);
+    expect(
+      normalizeMessages(
+        {
+          messages: [
+            {
+              message_id: "to_bot",
+              content: "{\"text\":\"用户发给机器人\"}",
+              sender: { id: "ou_self", name: "Me", type: "user" },
+              chat_partner: {
+                open_id: "bot_1",
+                name: "Build Bot",
+                open_bot_id: "cli_bot_1"
+              }
+            }
+          ]
+        },
+        "p2p"
+      )
+    ).toEqual([]);
+
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const provider = new FakeAnalysisProvider();
+    const base = new FakeRunner();
+    const runner: CommandRunner = {
+      async run(args) {
+        if (args[0] !== "im") return base.run(args);
+        if (args.includes("p2p")) {
+          return {
+            messages: [{
+              message_id: "bot_p2p",
+              content: "{\"text\":\"用户发给机器人\"}",
+              create_time: "1784476800000",
+              sender: { id: "ou_self", name: "Me", type: "user" },
+              chat_partner: { open_id: "bot_1", name: "Build Bot", type: "bot" },
+              chat_type: "p2p"
+            }]
+          };
+        }
+        return {
+          messages: [{
+            message_id: "bot_group",
+            content: "{\"text\":\"机器人群消息\"}",
+            create_time: "1784476800000",
+            sender: { id: "bot_1", name: "Build Bot", sender_type: "bot" },
+            chat_type: "group"
+          }]
+        };
+      }
+    };
+    const sync = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(runner),
+      createAnalysis(store, index, provider)
+    );
+    const status = await sync.sync({
+      now: new Date("2026-07-20T12:00:00Z"),
+      backfillDays: 1,
+      windowDays: 1
+    });
+    expect(status.results.find(({ source }) => source === "mentions")?.received).toBe(0);
+    expect(status.results.find(({ source }) => source === "p2p")?.received).toBe(0);
+    expect(index.byId("lark:message:bot_group")).toBeUndefined();
+    expect(index.byId("lark:message:bot_p2p")).toBeUndefined();
+    expect(
+      index
+        .all()
+        .some(({ data }) => data.type === "person" && data.title === "Build Bot")
+    ).toBe(false);
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it("preserves a locally completed native task across read-only sync", async () => {
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const sync = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(new FakeRunner()),
+      createAnalysis(store, index)
+    );
+    const options = {
+      now: new Date("2026-07-20T12:00:00Z"),
+      backfillDays: 1,
+      windowDays: 1
+    };
+    await sync.sync(options);
+    const nativeTodo = index
+      .all()
+      .find(
+        ({ data }) =>
+          data.type === "todo" &&
+          (data as { upstream?: string }).upstream === "lark_task"
+      );
+    expect(nativeTodo).toBeDefined();
+    await store.write(
+      nativeTodo!.path,
+      { ...nativeTodo!.data, status: "done" },
+      nativeTodo!.body,
+      { expectedEtag: nativeTodo!.etag }
+    );
+    await index.rebuild(store);
+
+    await sync.sync(options);
+    expect(index.byId(nativeTodo!.data.id)?.data.status).toBe("done");
+  });
+
+  it("exposes in-flight synchronization progress", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const base = new FakeRunner();
+    const runner: CommandRunner = {
+      async run(args) {
+        if (args[0] === "contact") {
+          entered();
+          await blocked;
+        }
+        return base.run(args);
+      }
+    };
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const sync = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(runner),
+      createAnalysis(store, index)
+    );
+    const running = sync.sync({
+      now: new Date("2026-07-20T12:00:00Z"),
+      backfillDays: 1,
+      windowDays: 1
+    });
+    await started;
+    expect(sync.getStatus()).toMatchObject({
+      running: true,
+      progress: {
+        phase: "collecting",
+        source: "self",
+        window_index: 0,
+        page_index: 0
+      }
+    });
+    release();
+    const completed = await running;
+    expect(completed.progress).toMatchObject({
+      phase: "completed",
+      message: "同步已完成"
+    });
   });
 
   it("parses actionable permission diagnostics and CLI update notices", () => {

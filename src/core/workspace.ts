@@ -153,7 +153,8 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
       started_at: null,
       completed_at: null,
       results: [],
-      last_error: null
+      last_error: null,
+      progress: null
     }),
     body: ""
   }

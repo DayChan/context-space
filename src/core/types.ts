@@ -222,6 +222,25 @@ export interface SyncStatus {
   completed_at: string | null;
   results: SyncSourceResult[];
   last_error: string | null;
+  progress: SyncProgress | null;
+}
+
+export type SyncPhase =
+  | "collecting"
+  | "analyzing"
+  | "completed"
+  | "failed";
+
+export interface SyncProgress {
+  phase: SyncPhase;
+  source: SyncSourceResult["source"] | null;
+  window_index: number | null;
+  window_count: number | null;
+  page_index: number | null;
+  received: number;
+  persisted: number;
+  message: string;
+  updated_at: string;
 }
 
 export interface LoopReadiness {
@@ -260,7 +279,8 @@ export const EMPTY_SYNC_STATUS: SyncStatus = {
   started_at: null,
   completed_at: null,
   results: [],
-  last_error: null
+  last_error: null,
+  progress: null
 };
 
 export function nowIso(): string {

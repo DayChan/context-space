@@ -78,11 +78,46 @@ function participant(
   };
 }
 
+function isBotActor(value: unknown): boolean {
+  const entry = object(value);
+  const actorType = firstString(
+    entry.type,
+    entry.sender_type,
+    entry.actor_type,
+    entry.user_type
+  ).toLowerCase();
+  return (
+    actorType === "bot" ||
+    actorType === "app" ||
+    Boolean(firstString(entry.open_bot_id, entry.bot_id))
+  );
+}
+
 export function normalizeMessages(payload: unknown, kind: "mention" | "p2p"): NormalizedSourceRecord[] {
   return arrayFrom(payload, ["messages", "items", "results"]).flatMap((raw) => {
     const message = object(raw);
     const id = firstString(message.message_id, message.id);
     if (!id) return [];
+    const senderActor: Record<string, unknown> = {
+      ...object(message.sender),
+      sender_type:
+        object(message.sender).sender_type ?? message.sender_type
+    };
+    const partnerActor: Record<string, unknown> = {
+      ...object(message.chat_partner ?? message.partner ?? message.peer),
+      actor_type:
+        object(message.chat_partner ?? message.partner ?? message.peer)
+          .actor_type ??
+        message.chat_partner_type ??
+        message.partner_type ??
+        message.peer_type
+    };
+    if (
+      isBotActor(senderActor) ||
+      (kind === "p2p" && isBotActor(partnerActor))
+    ) {
+      return [];
+    }
     const sender = participant(message.sender, "sender", "Lark user");
     const partner = participant(message.chat_partner, "partner", "Direct message partner");
     const participants = [sender, partner].filter(Boolean) as SourceParticipant[];
@@ -104,6 +139,16 @@ export function normalizeMessages(payload: unknown, kind: "mention" | "p2p"): No
           chat_id: message.chat_id,
           chat_type: message.chat_type ?? (kind === "p2p" ? "p2p" : "group"),
           chat_name: message.chat_name,
+          sender_type: firstString(
+            senderActor.type,
+            senderActor.sender_type,
+            senderActor.actor_type
+          ),
+          chat_partner_type: firstString(
+            partnerActor.type,
+            partnerActor.sender_type,
+            partnerActor.actor_type
+          ),
           thread_id: message.thread_id,
           mentions: message.mentions ?? [],
           deleted: Boolean(message.deleted),

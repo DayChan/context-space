@@ -7,6 +7,7 @@ import {
   type NormalizedSourceRecord,
   type PersonMetadata,
   type SourceMetadata,
+  type SyncProgress,
   type SyncSourceResult,
   type SyncStatus,
   type WorkspaceDocument,
@@ -21,6 +22,14 @@ import { sourceKindDirectory } from "./normalize";
 interface CheckpointData extends BaseMetadata {
   source_checkpoints: Record<string, { last_success_at: string }>;
   last_completed_at: string | null;
+}
+
+const DEFAULT_MAX_MESSAGE_PAGES_PER_WINDOW = 200;
+
+function isMessageSource(
+  source: LarkSyncSource
+): source is "mentions" | "p2p" {
+  return source === "mentions" || source === "p2p";
 }
 
 function safeSegment(value: string): string {
@@ -80,6 +89,7 @@ export interface SyncOptions {
   backfillDays?: number;
   overlapMinutes?: number;
   windowDays?: number;
+  maxMessagePagesPerWindow?: number;
   now?: Date;
 }
 
@@ -102,19 +112,65 @@ export class LarkSyncService {
     return this.status;
   }
 
+  private updateProgress(
+    update: Partial<SyncProgress> & Pick<SyncProgress, "phase" | "message">
+  ): void {
+    const previous = this.status.progress;
+    this.status = {
+      ...this.status,
+      progress: {
+        phase: update.phase,
+        source:
+          "source" in update ? update.source ?? null : previous?.source ?? null,
+        window_index:
+          "window_index" in update
+            ? update.window_index ?? null
+            : previous?.window_index ?? null,
+        window_count:
+          "window_count" in update
+            ? update.window_count ?? null
+            : previous?.window_count ?? null,
+        page_index:
+          "page_index" in update
+            ? update.page_index ?? null
+            : previous?.page_index ?? null,
+        received: update.received ?? previous?.received ?? 0,
+        persisted: update.persisted ?? previous?.persisted ?? 0,
+        message: update.message,
+        updated_at: nowIso()
+      }
+    };
+  }
+
   async loadStatus(): Promise<SyncStatus> {
     try {
       const document = await this.store.read(".context/sync/lark-status.md");
+      const wasRunning = Boolean(document.data.running);
       this.status = {
-        running: Boolean(document.data.running),
+        running: false,
         started_at: typeof document.data.started_at === "string" ? document.data.started_at : null,
         completed_at:
           typeof document.data.completed_at === "string" ? document.data.completed_at : null,
         results: Array.isArray(document.data.results)
           ? (document.data.results as unknown as SyncSourceResult[])
           : [],
-        last_error: typeof document.data.last_error === "string" ? document.data.last_error : null
+        last_error: wasRunning
+          ? "上一次飞书同步因服务退出而中断，请重新同步。"
+          : typeof document.data.last_error === "string"
+            ? document.data.last_error
+            : null,
+        progress:
+          document.data.progress &&
+          typeof document.data.progress === "object"
+            ? (document.data.progress as SyncProgress)
+            : null
       };
+      if (wasRunning) {
+        this.updateProgress({
+          phase: "failed",
+          message: "同步因服务退出而中断"
+        });
+      }
     } catch {
       this.status = { ...EMPTY_SYNC_STATUS };
     }
@@ -140,7 +196,20 @@ export class LarkSyncService {
             ...this.status,
             running: false,
             completed_at: nowIso(),
-            last_error: "飞书同步因未预期错误中止，请查看结构化日志。"
+            last_error: "飞书同步因未预期错误中止，请查看结构化日志。",
+            progress: {
+              ...(this.status.progress ?? {
+                source: null,
+                window_index: null,
+                window_count: null,
+                page_index: null,
+                received: 0,
+                persisted: 0
+              }),
+              phase: "failed",
+              message: "同步因未预期错误中止",
+              updated_at: nowIso()
+            }
           };
           try {
             await this.persistStatus();
@@ -162,17 +231,38 @@ export class LarkSyncService {
     const backfillDays = options.backfillDays ?? 30;
     const overlapMinutes = options.overlapMinutes ?? 10;
     const windowDays = options.windowDays ?? 7;
+    const maxMessagePagesPerWindow =
+      options.maxMessagePagesPerWindow ??
+      DEFAULT_MAX_MESSAGE_PAGES_PER_WINDOW;
+    if (
+      !Number.isInteger(maxMessagePagesPerWindow) ||
+      maxMessagePagesPerWindow < 1
+    ) {
+      throw new Error("maxMessagePagesPerWindow must be a positive integer");
+    }
     this.status = {
       running: true,
       started_at: nowIso(),
       completed_at: null,
       results: [],
-      last_error: null
+      last_error: null,
+      progress: {
+        phase: "collecting",
+        source: null,
+        window_index: null,
+        window_count: null,
+        page_index: null,
+        received: 0,
+        persisted: 0,
+        message: "正在准备飞书只读同步",
+        updated_at: nowIso()
+      }
     };
     this.logger.info("lark.sync.started", {
       backfill_days: backfillDays,
       overlap_minutes: overlapMinutes,
       window_days: windowDays,
+      max_message_pages_per_window: maxMessagePagesPerWindow,
       source_count: 5
     });
     await this.persistStatus();
@@ -206,23 +296,173 @@ export class LarkSyncService {
         persisted: 0,
         completed_at: now.toISOString()
       };
+      this.updateProgress({
+        phase: "collecting",
+        source,
+        window_index: 0,
+        window_count: windows.length,
+        page_index: 0,
+        received: 0,
+        persisted: 0,
+        message: `正在同步 ${source}`
+      });
 
       for (const [windowIndex, window] of windows.entries()) {
         const windowStarted = process.hrtime.bigint();
+        let windowReceived = 0;
+        let pageToken: string | undefined;
+        let pageIndex = 0;
+        const seenPageTokens = new Set<string>();
+        let windowFailure:
+          | { error: string; issue?: SyncSourceResult["issue"] }
+          | undefined;
         this.logger.info("lark.sync.window.started", {
           source,
           window_index: windowIndex,
           start_at: window.start.toISOString(),
           end_at: window.end.toISOString()
         });
-        const fetched = await this.adapter.fetchSource(source, window.start, window.end);
-        sourceResult.received += fetched.result.received;
-        if (!fetched.result.ok) {
+
+        while (true) {
+          this.updateProgress({
+            phase: "collecting",
+            source,
+            window_index: windowIndex,
+            window_count: windows.length,
+            page_index: pageIndex,
+            received: sourceResult.received,
+            persisted: sourceResult.persisted,
+            message: `正在读取 ${source} 第 ${windowIndex + 1}/${windows.length} 个窗口，第 ${pageIndex + 1} 页`
+          });
+          const pageStarted = process.hrtime.bigint();
+          this.logger.info("lark.sync.page.started", {
+            source,
+            window_index: windowIndex,
+            page_index: pageIndex
+          });
+          const fetched = await this.adapter.fetchSource(
+            source,
+            window.start,
+            window.end,
+            pageToken
+          );
+          windowReceived += fetched.result.received;
+          sourceResult.received += fetched.result.received;
+          this.updateProgress({
+            phase: "collecting",
+            source,
+            window_index: windowIndex,
+            window_count: windows.length,
+            page_index: pageIndex,
+            received: sourceResult.received,
+            persisted: sourceResult.persisted,
+            message: fetched.result.ok
+              ? `已读取 ${source} 第 ${pageIndex + 1} 页`
+              : `${source} 第 ${pageIndex + 1} 页读取失败`
+          });
+
+          if (!fetched.result.ok) {
+            windowFailure = {
+              error: fetched.result.error ?? "飞书来源页面读取失败",
+              ...(fetched.result.issue ? { issue: fetched.result.issue } : {})
+            };
+            this.logger.warn("lark.sync.page.failed", {
+              source,
+              window_index: windowIndex,
+              page_index: pageIndex,
+              duration_ms:
+                Math.round(
+                  (Number(process.hrtime.bigint() - pageStarted) / 1_000_000) *
+                    100
+                ) / 100,
+              issue_kind: fetched.result.issue?.kind,
+              issue_code: fetched.result.issue?.code,
+              requires_action:
+                fetched.result.issue?.requires_action ?? false,
+              error_message: fetched.result.error
+            });
+            break;
+          }
+
+          for (const record of fetched.records) {
+            sourceResult.persisted += await this.persistRecord(record);
+            recordsForAnalysis.push(record);
+            sourceByRecordId.set(record.sourceId, source);
+          }
+          this.updateProgress({
+            phase: "collecting",
+            source,
+            window_index: windowIndex,
+            window_count: windows.length,
+            page_index: pageIndex,
+            received: sourceResult.received,
+            persisted: sourceResult.persisted,
+            message: `已处理 ${source} 第 ${pageIndex + 1} 页`
+          });
+          this.logger.info("lark.sync.page.completed", {
+            source,
+            window_index: windowIndex,
+            page_index: pageIndex,
+            received: fetched.result.received,
+            persisted_total: sourceResult.persisted,
+            has_more: fetched.pagination.hasMore,
+            duration_ms:
+              Math.round(
+                (Number(process.hrtime.bigint() - pageStarted) / 1_000_000) *
+                  100
+              ) / 100
+          });
+
+          if (!isMessageSource(source) || !fetched.pagination.hasMore) {
+            break;
+          }
+
+          const nextPageToken = fetched.pagination.nextPageToken;
+          if (!nextPageToken) {
+            windowFailure = {
+              error:
+                "飞书消息分页未完成：上游声明存在下一页，但未返回有效 page_token。"
+            };
+          } else if (
+            nextPageToken === pageToken ||
+            seenPageTokens.has(nextPageToken)
+          ) {
+            windowFailure = {
+              error: "飞书消息分页未完成：上游返回了重复的 page_token。"
+            };
+          } else if (pageIndex + 1 >= maxMessagePagesPerWindow) {
+            windowFailure = {
+              error: `飞书消息分页未完成：窗口达到 ${maxMessagePagesPerWindow} 页安全上限后仍有下一页。`
+            };
+          }
+
+          if (windowFailure) {
+            this.logger.warn("lark.sync.page.failed", {
+              source,
+              window_index: windowIndex,
+              page_index: pageIndex,
+              duration_ms:
+                Math.round(
+                  (Number(process.hrtime.bigint() - pageStarted) / 1_000_000) *
+                    100
+                ) / 100,
+              requires_action: false,
+              error_message: windowFailure.error
+            });
+            break;
+          }
+
+          seenPageTokens.add(nextPageToken!);
+          pageToken = nextPageToken;
+          pageIndex += 1;
+        }
+
+        if (windowFailure) {
           sourceResult = {
             ...sourceResult,
             ok: false,
-            error: fetched.result.error,
-            ...(fetched.result.issue ? { issue: fetched.result.issue } : {}),
+            error: windowFailure.error,
+            ...(windowFailure.issue ? { issue: windowFailure.issue } : {}),
             completed_at: undefined
           };
           this.logger.warn("lark.sync.window.failed", {
@@ -235,25 +475,24 @@ export class LarkSyncService {
                 (Number(process.hrtime.bigint() - windowStarted) / 1_000_000) *
                   100
               ) / 100,
-            issue_kind: fetched.result.issue?.kind,
-            issue_code: fetched.result.issue?.code,
-            log_id: fetched.result.issue?.log_id,
-            requires_action: fetched.result.issue?.requires_action ?? false,
-            error_message: fetched.result.error
+            page_count: pageIndex + 1,
+            received: windowReceived,
+            issue_kind: windowFailure.issue?.kind,
+            issue_code: windowFailure.issue?.code,
+            log_id: windowFailure.issue?.log_id,
+            requires_action: windowFailure.issue?.requires_action ?? false,
+            error_message: windowFailure.error
           });
           break;
         }
-        for (const record of fetched.records) {
-          sourceResult.persisted += await this.persistRecord(record);
-          recordsForAnalysis.push(record);
-          sourceByRecordId.set(record.sourceId, source);
-        }
+
         this.logger.info("lark.sync.window.completed", {
           source,
           window_index: windowIndex,
           start_at: window.start.toISOString(),
           end_at: window.end.toISOString(),
-          received: fetched.result.received,
+          page_count: pageIndex + 1,
+          received: windowReceived,
           persisted_total: sourceResult.persisted,
           duration_ms:
             Math.round(
@@ -267,6 +506,10 @@ export class LarkSyncService {
         checkpoint.data.source_checkpoints[source] = { last_success_at: now.toISOString() };
       }
       results.push(sourceResult);
+      this.status = {
+        ...this.status,
+        results: [...results]
+      };
       const sourceFields = {
         source,
         ok: sourceResult.ok,
@@ -291,6 +534,20 @@ export class LarkSyncService {
     }
 
     await this.index.rebuild(this.store);
+    this.updateProgress({
+      phase: "analyzing",
+      source: null,
+      window_index: null,
+      window_count: null,
+      page_index: null,
+      received: recordsForAnalysis.length,
+      persisted: results.reduce(
+        (sum, result) => sum + result.persisted,
+        0
+      ),
+      message: `正在分析 ${recordsForAnalysis.length} 条已采集记录`
+    });
+    await this.persistStatus();
     this.logger.info("lark.sync.analysis.started", {
       record_count: recordsForAnalysis.length,
       message_count: recordsForAnalysis.filter(
@@ -362,7 +619,20 @@ export class LarkSyncService {
           return `飞书同步需要人工处理：${actionable.source} - ${actionable.error ?? "权限或认证失败"}`;
         }
         return `飞书同步存在失败来源：${failed.map(({ source }) => source).join("、")}；成功来源已保留。`;
-      })()
+      })(),
+      progress: {
+        phase: results.some((result) => !result.ok) ? "failed" : "completed",
+        source: null,
+        window_index: null,
+        window_count: null,
+        page_index: null,
+        received: results.reduce((sum, result) => sum + result.received, 0),
+        persisted: results.reduce((sum, result) => sum + result.persisted, 0),
+        message: results.some((result) => !result.ok)
+          ? "同步完成，但存在失败来源"
+          : "同步已完成",
+        updated_at: nowIso()
+      }
     };
     await this.persistStatus();
     await this.index.rebuild(this.store);
@@ -403,7 +673,18 @@ export class LarkSyncService {
   }
 
   private async readCheckpoint(): Promise<WorkspaceDocument<CheckpointData>> {
-    return this.store.read<CheckpointData>(".context/sync/lark.md");
+    const checkpoint = await this.store.read<CheckpointData>(
+      ".context/sync/lark.md"
+    );
+    return {
+      ...checkpoint,
+      data: {
+        ...checkpoint.data,
+        source_checkpoints: {
+          ...checkpoint.data.source_checkpoints
+        }
+      }
+    };
   }
 
   private async persistStatus(): Promise<void> {

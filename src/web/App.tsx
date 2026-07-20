@@ -23,7 +23,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { FormEvent, ReactNode, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
   BrowserRouter,
   Link,
@@ -60,6 +60,13 @@ import { useApi } from "./hooks";
 import "./styles.css";
 
 interface ApiDocument<T extends BaseMetadata = BaseMetadata> extends WorkspaceDocument<T> {
+  provenanceSources?: Array<{
+    id: string;
+    title: string;
+    body: string;
+    occurred_at: string;
+    source_kind: SourceMetadata["source_kind"];
+  }>;
   relationships?: {
     owedByMe: TodoMetadata[];
     waitingOnThem: TodoMetadata[];
@@ -418,28 +425,61 @@ function Priority({ todo }: { todo: TodoMetadata }) {
 }
 
 function TodoRow({ todo, compact = false }: { todo: TodoMetadata; compact?: boolean }) {
+  const [statusOverride, setStatusOverride] = useState<TodoMetadata["status"] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const status = statusOverride ?? todo.status;
+
+  async function toggleStatus() {
+    const next = status === "done" ? "open" : "done";
+    setStatusOverride(next);
+    setSaving(true);
+    setError("");
+    try {
+      await api(`/api/todos/${encodeURIComponent(todo.id)}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: next })
+      });
+    } catch (caught) {
+      setStatusOverride(null);
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <Link className={`todo-row ${compact ? "compact" : ""}`} to={`/documents/${encodeURIComponent(todo.id)}`}>
-      <span className={`todo-check status-${todo.status}`}>
-        {todo.status === "done" ? <Check size={15} /> : <span />}
-      </span>
-      <div className="todo-main">
-        <div className="todo-title-line">
-          <strong>{todo.title}</strong>
-          <Badge tone={todo.direction === "waiting_on_them" ? "amber" : "blue"}>
-            {todo.direction === "waiting_on_them" ? "等待对方" : todo.direction === "shared" ? "共同推进" : "我来处理"}
-          </Badge>
-          {todo.analysis && (
-            <Badge tone={todo.analysis.stale ? "amber" : "purple"}>
-              {todo.analysis.stale ? "分析已过时" : todo.analysis.provider}
+    <div className={`todo-row ${compact ? "compact" : ""}`}>
+      <button
+        aria-label={status === "done" ? `重新打开 ${todo.title}` : `标记完成 ${todo.title}`}
+        className={`todo-check status-${status}`}
+        disabled={saving}
+        onClick={() => void toggleStatus()}
+        title={error || undefined}
+        type="button"
+      >
+        {status === "done" ? <Check size={15} /> : <span />}
+      </button>
+      <Link className="todo-link" to={`/documents/${encodeURIComponent(todo.id)}`}>
+        <div className="todo-main">
+          <div className="todo-title-line">
+            <strong>{todo.title}</strong>
+            <Badge tone={todo.direction === "waiting_on_them" ? "amber" : "blue"}>
+              {todo.direction === "waiting_on_them" ? "等待对方" : todo.direction === "shared" ? "共同推进" : "我来处理"}
             </Badge>
-          )}
+            {todo.analysis && (
+              <Badge tone={todo.analysis.stale ? "amber" : "purple"}>
+                {todo.analysis.stale ? "分析已过时" : todo.analysis.provider}
+              </Badge>
+            )}
+          </div>
+          <span>{todo.due_at ? `${formatDate(todo.due_at)} 到期` : statusLabel(status)}</span>
         </div>
-        <span>{todo.due_at ? `${formatDate(todo.due_at)} 到期` : statusLabel(todo.status)}</span>
-      </div>
-      {!compact && <Priority todo={todo} />}
-      <ChevronRight size={17} className="row-arrow" />
-    </Link>
+        {!compact && <Priority todo={{ ...todo, status }} />}
+        <ChevronRight size={17} className="row-arrow" />
+      </Link>
+      {error && <span className="todo-status-error" role="alert">{error}</span>}
+    </div>
   );
 }
 
@@ -454,6 +494,30 @@ function SourceRow({ source }: { source: SourceMetadata }) {
         <span>{formatDate(source.occurred_at)}</span>
       </div>
       <ArrowUpRight size={15} />
+    </Link>
+  );
+}
+
+function ProvenanceSource({
+  source
+}: {
+  source: NonNullable<ApiDocument["provenanceSources"]>[number];
+}) {
+  const excerpt = source.body
+    .replace(/^# .*\n+/u, "")
+    .replace(/\*\*Participants:\*\*.*\n?/u, "")
+    .replace(/\*\*Occurred:\*\*.*\n?/u, "")
+    .trim();
+  return (
+    <Link
+      className="provenance-source"
+      to={`/documents/${encodeURIComponent(source.id)}`}
+    >
+      <span>
+        <strong>{source.title}</strong>
+        <small>{formatDate(source.occurred_at)}</small>
+      </span>
+      <p>{excerpt || "该来源没有文本内容。"}</p>
     </Link>
   );
 }
@@ -790,15 +854,32 @@ function SettingsPage() {
       recent_runs: []
     }
   });
+  const {
+    data: liveStatus,
+    error: syncStatusError,
+    reload: reloadSyncStatus
+  } = useApi<SyncStatus>(
+    "/api/sync/lark/status",
+    EMPTY_SYNC_STATUS
+  );
   const people = useApi<ApiDocument<PersonMetadata>[]>("/api/documents?type=person", []);
   const [syncing, setSyncing] = useState(false);
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [message, setMessage] = useState("");
+  useEffect(() => {
+    if (!syncing && !liveStatus.running) return;
+    void reloadSyncStatus();
+    const timer = window.setInterval(() => {
+      void reloadSyncStatus();
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, [syncing, liveStatus.running, reloadSyncStatus]);
 
   async function syncLark() {
     setSyncing(true);
     setMessage("");
+    void reloadSyncStatus();
     try {
       const status = await api<SyncStatus>("/api/sync/lark", { method: "POST" });
       const failed = status.results.filter((result) => !result.ok);
@@ -809,7 +890,7 @@ function SettingsPage() {
       } else {
         setMessage("只读同步完成。");
       }
-      await config.reload();
+      await Promise.all([config.reload(), reloadSyncStatus()]);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -872,7 +953,7 @@ function SettingsPage() {
   return (
     <>
       <PageHeader eyebrow="Local control" title="Settings" description="数据源、Leader、同步和安全边界都由本地 Markdown 配置。" />
-      <ErrorBanner message={config.error ?? people.error} />
+      <ErrorBanner message={config.error ?? people.error ?? syncStatusError} />
       {message && <div className="info-banner">{message}</div>}
       <div className="settings-grid">
         <Section title="Lark source" subtitle="仅用户身份、只读命令">
@@ -882,18 +963,49 @@ function SettingsPage() {
             <Badge tone="mint">Protected</Badge>
           </div>
           <div className="sync-summary">
-            <div><span>最后完成</span><strong>{formatDate(config.data.lark.status.completed_at)}</strong></div>
-            <div><span>来源结果</span><strong>{config.data.lark.status.results.filter((result) => result.ok).length}/{config.data.lark.status.results.length || 5}</strong></div>
+            <div><span>最后完成</span><strong>{formatDate(liveStatus.completed_at)}</strong></div>
+            <div><span>来源结果</span><strong>{liveStatus.results.filter((result) => result.ok).length}/{liveStatus.results.length || 5}</strong></div>
             <div>
               <span>分析失败</span>
-              <strong>{config.data.lark.status.results.reduce((sum, result) => sum + (result.analysis_failed ?? 0), 0)}</strong>
+              <strong>{liveStatus.results.reduce((sum, result) => sum + (result.analysis_failed ?? 0), 0)}</strong>
             </div>
           </div>
-          <LarkSyncIssues status={config.data.lark.status} />
-          <button className="primary-button full-button" disabled={syncing} onClick={syncLark}>
-            <RefreshCw className={syncing ? "spin" : ""} size={17} />
-            {syncing ? "正在同步…" : "立即只读同步"}
+          <LarkSyncIssues status={liveStatus} />
+          <button className="primary-button full-button" disabled={syncing || liveStatus.running} onClick={syncLark}>
+            <RefreshCw className={syncing || liveStatus.running ? "spin" : ""} size={17} />
+            {syncing || liveStatus.running ? "正在同步…" : "立即只读同步"}
           </button>
+        </Section>
+
+        <Section title="同步状态" subtitle="运行时进度与错误">
+          <div className={`sync-progress-window ${liveStatus.running ? "running" : ""}`}>
+            <div className="sync-progress-head">
+              <span className="sync-progress-dot" />
+              <div>
+                <strong>{liveStatus.progress?.message ?? "尚未执行同步"}</strong>
+                <span>
+                  {liveStatus.running
+                    ? "同步进行中"
+                    : liveStatus.progress?.phase === "failed"
+                      ? "存在问题"
+                      : liveStatus.progress?.phase === "completed"
+                        ? "同步完成"
+                        : "空闲"}
+                </span>
+              </div>
+              <Badge tone={liveStatus.running ? "blue" : liveStatus.last_error ? "coral" : "mint"}>
+                {liveStatus.progress?.phase ?? "idle"}
+              </Badge>
+            </div>
+            <div className="sync-progress-grid">
+              <div><span>当前来源</span><strong>{liveStatus.progress?.source ? larkSourceLabels[liveStatus.progress.source] : "—"}</strong></div>
+              <div><span>时间窗口</span><strong>{liveStatus.progress?.window_index !== null && liveStatus.progress?.window_index !== undefined ? `${liveStatus.progress.window_index + 1}/${liveStatus.progress.window_count ?? "?"}` : "—"}</strong></div>
+              <div><span>当前页</span><strong>{liveStatus.progress?.page_index !== null && liveStatus.progress?.page_index !== undefined ? liveStatus.progress.page_index + 1 : "—"}</strong></div>
+              <div><span>读取 / 新增</span><strong>{liveStatus.progress ? `${liveStatus.progress.received} / ${liveStatus.progress.persisted}` : "0 / 0"}</strong></div>
+            </div>
+            {liveStatus.progress?.updated_at && <small>更新于 {formatDate(liveStatus.progress.updated_at)}</small>}
+            {liveStatus.last_error && <div className="sync-progress-error"><AlertTriangle size={14} />{liveStatus.last_error}</div>}
+          </div>
         </Section>
 
         <Section title="LLM 内容分析" subtitle={`${config.data.analysis.prompt_version} · ${config.data.analysis.schema_version}`}>
@@ -1039,6 +1151,7 @@ function DocumentPage() {
   const [editing, setEditing] = useState(false);
   const [body, setBody] = useState("");
   const [saveError, setSaveError] = useState("");
+  const [statusSaving, setStatusSaving] = useState(false);
 
   const document = resource.data;
   async function save() {
@@ -1056,6 +1169,24 @@ function DocumentPage() {
     }
   }
 
+  async function toggleTodoStatus(todo: TodoMetadata) {
+    setStatusSaving(true);
+    setSaveError("");
+    try {
+      await api(`/api/todos/${encodeURIComponent(todo.id)}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: todo.status === "done" ? "open" : "done"
+        })
+      });
+      await resource.reload();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStatusSaving(false);
+    }
+  }
+
   if (resource.loading && !document) return <EmptyState title="正在加载文档…" description="读取 Markdown 与来源引用。" />;
   if (!document) return <EmptyState title="文档不存在" description={resource.error ?? "该 ID 未被索引。"} />;
 
@@ -1067,11 +1198,25 @@ function DocumentPage() {
         eyebrow={`${document.data.type} · ${document.data.managed}`}
         title={document.data.title}
         description={`更新于 ${formatDate(document.data.updated_at)} · ${document.path}`}
-        action={document.data.managed !== "generated" ? (
-          <button className="secondary-button" onClick={() => { setBody(document.body); setEditing(!editing); }}>
-            <FileText size={16} />{editing ? "取消编辑" : "编辑 Markdown"}
-          </button>
-        ) : <Badge tone="neutral">Generated · read only</Badge>}
+        action={
+          <div className="page-actions">
+            {todo && (
+              <button
+                className="secondary-button"
+                disabled={statusSaving}
+                onClick={() => void toggleTodoStatus(todo)}
+              >
+                <CheckCircle2 size={16} />
+                {todo.status === "done" ? "重新打开" : "标记完成"}
+              </button>
+            )}
+            {document.data.managed !== "generated" ? (
+              <button className="secondary-button" onClick={() => { setBody(document.body); setEditing(!editing); }}>
+                <FileText size={16} />{editing ? "取消编辑" : "编辑 Markdown"}
+              </button>
+            ) : <Badge tone="neutral">Generated · read only</Badge>}
+          </div>
+        }
       />
       <ErrorBanner message={resource.error ?? saveError} />
       <div className="detail-layout">
@@ -1125,7 +1270,16 @@ function DocumentPage() {
                     </ul>
                     <div className="observation-sources">
                       {(observation.source_refs ?? []).map((reference) => (
-                        <code key={reference}>{reference}</code>
+                        document.provenanceSources?.find(
+                          (source) => source.id === reference
+                        ) ? (
+                          <ProvenanceSource
+                            key={reference}
+                            source={document.provenanceSources.find(
+                              (source) => source.id === reference
+                            )!}
+                          />
+                        ) : <code key={reference}>{reference}</code>
                       ))}
                     </div>
                   </article>
@@ -1138,7 +1292,14 @@ function DocumentPage() {
           )}
           <Section title="Provenance">
             <div className="source-refs">
-              {document.data.source_refs.map((reference) => <code key={reference}>{reference}</code>)}
+              {document.data.source_refs.map((reference) => {
+                const source = document.provenanceSources?.find(
+                  (candidate) => candidate.id === reference
+                );
+                return source
+                  ? <ProvenanceSource key={reference} source={source} />
+                  : <code key={reference}>{reference}</code>;
+              })}
               {!document.data.source_refs.length && <span className="muted-copy">Manual or baseline document</span>}
             </div>
             {typeof document.data.confidence === "number" && <div className="confidence"><span>Confidence</span><strong>{Math.round(document.data.confidence * 100)}%</strong></div>}

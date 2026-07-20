@@ -93,7 +93,7 @@ export class DerivedDocumentWriter {
         {
           ...todo,
           ...existing.data,
-          status: todo.status,
+          status: existing.data.status,
           due_at: todo.due_at,
           stakeholders: todo.stakeholders,
           source_refs: [...new Set([...existing.data.source_refs, ...todo.source_refs])],

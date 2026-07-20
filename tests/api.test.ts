@@ -9,7 +9,7 @@ import type {
 } from "../src/analysis/contracts";
 import type { CommandRunner } from "../src/adapters/lark/runner";
 import { createTodoMetadata } from "../src/core/todo";
-import type { SourceMetadata } from "../src/core/types";
+import type { PersonMetadata, SourceMetadata } from "../src/core/types";
 import {
   createConfiguredLogger,
   type Logger,
@@ -117,6 +117,83 @@ describe("local API", () => {
     await request(context.app).put("/api/documents/todo_api").send(update).expect(409);
   });
 
+  it("updates Todo status through the dedicated endpoint", async () => {
+    const todo = createTodoMetadata({ id: "todo_status", title: "Status Todo" });
+    await context.runtime.store.write("todos/items/todo_status.md", todo, "# Status Todo");
+    await context.runtime.index.rebuild(context.runtime.store);
+
+    const completed = await request(context.app)
+      .patch("/api/todos/todo_status/status")
+      .send({ status: "done" })
+      .expect(200);
+    expect(completed.body.data.status).toBe("done");
+
+    const reopened = await request(context.app)
+      .patch("/api/todos/todo_status/status")
+      .send({ status: "open" })
+      .expect(200);
+    expect(reopened.body.data.status).toBe("open");
+    await request(context.app)
+      .patch("/api/todos/todo_status/status")
+      .send({ status: "invalid" })
+      .expect(400);
+  });
+
+  it("resolves concrete provenance messages for People", async () => {
+    const timestamp = "2026-07-20T00:00:00.000Z";
+    const source: SourceMetadata = {
+      schema: "work-context/source@1",
+      id: "lark:message:person_api",
+      type: "source",
+      title: "发布讨论",
+      managed: "generated",
+      created_at: timestamp,
+      updated_at: timestamp,
+      source_refs: [],
+      provider: "lark",
+      source_kind: "p2p",
+      source_id: "lark:message:person_api",
+      occurred_at: timestamp,
+      participants: [],
+      provider_metadata: {}
+    };
+    const person: PersonMetadata = {
+      schema: "work-context/person@1",
+      id: "person_api",
+      type: "person",
+      title: "Alice",
+      managed: "hybrid",
+      created_at: timestamp,
+      updated_at: timestamp,
+      source_refs: [source.id],
+      identities: [],
+      role: null,
+      role_origin: null,
+      is_leader: false,
+      leader_boost: 20,
+      observations: [],
+      last_interaction_at: timestamp
+    };
+    await context.runtime.store.write(
+      "sources/lark/dms/alice/person_api.md",
+      source,
+      "# 发布讨论\n\nAlice 会在评审前汇总阻塞项"
+    );
+    await context.runtime.store.write("people/person_api.md", person, "# Alice");
+    await context.runtime.index.rebuild(context.runtime.store);
+
+    const response = await request(context.app)
+      .get("/api/documents/person_api")
+      .expect(200);
+    expect(response.body.provenanceSources).toEqual([
+      expect.objectContaining({
+        id: source.id,
+        title: "发布讨论",
+        body: expect.stringContaining("汇总阻塞项")
+      })
+    ]);
+  });
+
   it("updates explicit Leader configuration", async () => {
     await request(context.app)
       .put("/api/config/leaders")
@@ -130,10 +207,22 @@ describe("local API", () => {
   });
 
   it("runs a read-only synchronization through the injected runner", async () => {
+    const before = await request(context.app)
+      .get("/api/sync/lark/status")
+      .expect(200);
+    expect(before.body.running).toBe(false);
     const status = await request(context.app).post("/api/sync/lark").expect(200);
     expect(status.body.running).toBe(false);
     expect(status.body.results).toHaveLength(5);
     expect(status.body.results.every((result: { ok: boolean }) => result.ok)).toBe(true);
+    expect(status.body.progress).toMatchObject({
+      phase: "completed",
+      message: "同步已完成"
+    });
+    const after = await request(context.app)
+      .get("/api/sync/lark/status")
+      .expect(200);
+    expect(after.body.progress.phase).toBe("completed");
   });
 
   it("switches providers without making an analysis call", async () => {

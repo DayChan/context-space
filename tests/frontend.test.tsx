@@ -121,6 +121,7 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 let selectedProvider = "codex-sdk";
 let selectedModel: string | null = null;
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
+let owedTodoStatus: TodoMetadata["status"] = "open";
 
 function configResponse() {
   return {
@@ -175,6 +176,7 @@ beforeEach(() => {
   selectedProvider = "codex-sdk";
   selectedModel = null;
   larkStatus = EMPTY_SYNC_STATUS;
+  owedTodoStatus = "open";
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -190,12 +192,25 @@ beforeEach(() => {
           config: { provider: selectedProvider, model: selectedModel }
         });
       }
+      if (url === "/api/sync/lark/status") return jsonResponse(larkStatus);
       if (url === "/api/sync/lark") return jsonResponse(larkStatus);
+      if (url === "/api/todos/todo_owed/status") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          status: TodoMetadata["status"];
+        };
+        owedTodoStatus = body.status;
+        return jsonResponse({
+          path: "todos/owed.md",
+          data: { ...owedTodo, status: owedTodoStatus },
+          body: "",
+          etag: "updated"
+        });
+      }
       if (url === "/api/config") return jsonResponse(configResponse());
       if (url.startsWith("/api/overview")) return jsonResponse(overview);
       if (url.startsWith("/api/documents?type=todo")) {
         return jsonResponse([
-          { path: "todos/owed.md", data: owedTodo, body: "", etag: "1" },
+          { path: "todos/owed.md", data: { ...owedTodo, status: owedTodoStatus }, body: "", etag: "1" },
           { path: "todos/waiting.md", data: waitingTodo, body: "", etag: "2" }
         ]);
       }
@@ -209,7 +224,7 @@ beforeEach(() => {
       if (url.startsWith("/api/documents/todo_owed")) {
         return jsonResponse({
           path: "todos/owed.md",
-          data: owedTodo,
+          data: { ...owedTodo, status: owedTodoStatus },
           body: "# 准备发布计划\n\n来自群聊上下文。",
           etag: "1"
         });
@@ -224,7 +239,23 @@ beforeEach(() => {
             owedByMe: [],
             waitingOnThem: [],
             shared: []
-          }
+          },
+          provenanceSources: [
+            {
+              id: "lark:message:person_1",
+              title: "发布评审群",
+              body: "# 发布评审群\n\n**Occurred:** 2026-07-20T01:30:00Z\n\nAlice 负责发布流程",
+              occurred_at: "2026-07-20T01:30:00Z",
+              source_kind: "mention"
+            },
+            {
+              id: "lark:message:person_2",
+              title: "Alice",
+              body: "# Alice\n\n**Occurred:** 2026-07-20T02:00:00Z\n\nAlice 会在评审前汇总阻塞项",
+              occurred_at: "2026-07-20T02:00:00Z",
+              source_kind: "p2p"
+            }
+          ]
         });
       }
       return jsonResponse([]);
@@ -252,6 +283,19 @@ describe("Context Space workbench", () => {
     expect(screen.getByText("等待 Alice 评审")).toBeInTheDocument();
   });
 
+  it("marks a Todo complete from the list", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/todos"]}><AppView /></MemoryRouter>);
+    const toggle = await screen.findByRole("button", { name: "标记完成 准备发布计划" });
+    await user.click(toggle);
+    expect(await screen.findByRole("button", { name: "重新打开 准备发布计划" })).toBeInTheDocument();
+    expect(owedTodoStatus).toBe("done");
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/todos/todo_owed/status",
+      expect.objectContaining({ method: "PATCH" })
+    );
+  });
+
   it("shows provenance and disabled automation on Todo detail", async () => {
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/documents/todo_owed"]}><AppView /></MemoryRouter>);
     expect(await screen.findByText("lark:message:om_1")).toBeInTheDocument();
@@ -266,8 +310,35 @@ describe("Context Space workbench", () => {
     expect(await screen.findByText("职场观察")).toBeInTheDocument();
     expect(screen.getByText("协作方式")).toBeInTheDocument();
     expect(screen.getByText("在关键评审前主动汇总阻塞项。")).toBeInTheDocument();
-    expect(screen.getByText("Alice 会在评审前汇总阻塞项")).toBeInTheDocument();
+    expect(screen.getAllByText("Alice 会在评审前汇总阻塞项").length).toBeGreaterThan(0);
     expect(screen.getByText(/86%/)).toBeInTheDocument();
+    expect(screen.getAllByText("发布评审群").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Alice 负责发布流程").length).toBeGreaterThan(0);
+  });
+
+  it("shows the current synchronization activity", async () => {
+    larkStatus = {
+      running: true,
+      started_at: "2026-07-20T01:00:00Z",
+      completed_at: null,
+      last_error: null,
+      results: [],
+      progress: {
+        phase: "collecting",
+        source: "p2p",
+        window_index: 1,
+        window_count: 3,
+        page_index: 4,
+        received: 125,
+        persisted: 80,
+        message: "正在读取 p2p 第 2/3 个窗口，第 5 页",
+        updated_at: "2026-07-20T01:00:10Z"
+      }
+    };
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+    expect(await screen.findByText("正在读取 p2p 第 2/3 个窗口，第 5 页")).toBeInTheDocument();
+    expect(screen.getByText("P2P 消息")).toBeInTheDocument();
+    expect(screen.getByText("125 / 80")).toBeInTheDocument();
   });
 
   it("keeps Loop visible and explicitly inert", async () => {
@@ -322,6 +393,17 @@ describe("Context Space workbench", () => {
       started_at: "2026-07-20T01:00:00Z",
       completed_at: "2026-07-20T01:01:00Z",
       last_error: "飞书同步需要人工处理",
+      progress: {
+        phase: "failed",
+        source: "mentions",
+        window_index: 0,
+        window_count: 1,
+        page_index: 0,
+        received: 0,
+        persisted: 0,
+        message: "群聊提及读取失败",
+        updated_at: "2026-07-20T01:01:00Z"
+      },
       results: [
         {
           source: "mentions",
