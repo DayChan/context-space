@@ -27,6 +27,7 @@ const REQUIRED_DIRECTORIES = [
   "loop/runs",
   ".context/sync",
   ".context/index",
+  ".context/logs",
   ".context/analysis/runs"
 ] as const;
 
@@ -69,8 +70,10 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
       model: null,
       timeout_ms: 120000,
       max_source_chars: 20000,
+      max_batch_records: 50,
+      max_batch_source_chars: 60000,
       max_output_bytes: 2000000,
-      prompt_version: "context-analysis@1",
+      prompt_version: "context-analysis@2",
       retain_runs: 50,
       max_reanalysis_records: 50
     }),
@@ -167,6 +170,42 @@ export async function initializeWorkspace(root: string): Promise<MarkdownStore> 
     if (!(await store.exists(file.path))) {
       await store.write(file.path, file.data, file.body, { createOnly: true });
     }
+  }
+  const analysisConfig = await store.read("config/analysis.md");
+  const storedMaxSourceCharacters =
+    typeof analysisConfig.data.max_source_chars === "number"
+      ? analysisConfig.data.max_source_chars
+      : 20000;
+  const migratedAnalysis = {
+    ...analysisConfig.data,
+    ...(analysisConfig.data.max_batch_records === undefined
+      ? { max_batch_records: 50 }
+      : {}),
+    ...(analysisConfig.data.max_batch_source_chars === undefined
+      ? {
+          max_batch_source_chars: Math.max(
+            60000,
+            storedMaxSourceCharacters
+          )
+        }
+      : {}),
+    ...(analysisConfig.data.prompt_version === "context-analysis@1"
+      ? { prompt_version: "context-analysis@2" }
+      : {})
+  };
+  if (
+    migratedAnalysis.max_batch_records !==
+      analysisConfig.data.max_batch_records ||
+    migratedAnalysis.max_batch_source_chars !==
+      analysisConfig.data.max_batch_source_chars ||
+    migratedAnalysis.prompt_version !== analysisConfig.data.prompt_version
+  ) {
+    await store.write(
+      analysisConfig.path,
+      { ...migratedAnalysis, updated_at: nowIso() },
+      analysisConfig.body,
+      { expectedEtag: analysisConfig.etag }
+    );
   }
   return store;
 }

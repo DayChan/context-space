@@ -62,6 +62,8 @@ export interface AnalysisConfig {
   model: string | null;
   timeout_ms: number;
   max_source_chars: number;
+  max_batch_records: number;
+  max_batch_source_chars: number;
   max_output_bytes: number;
   prompt_version: string;
   retain_runs: number;
@@ -78,6 +80,7 @@ export interface AnalysisRunMetadata extends BaseMetadata {
   type: "analysis-run";
   status: AnalysisRunStatus;
   source_id: string;
+  source_ids?: string[];
   source_hash: string;
   provider: string;
   model: string | null;
@@ -113,6 +116,8 @@ export interface AnalysisExecutionResult {
 }
 
 export class AnalysisProviderError extends Error {
+  eventTypes: string[] = [];
+
   constructor(
     public readonly code: AnalysisErrorCode,
     message: string,
@@ -124,16 +129,27 @@ export class AnalysisProviderError extends Error {
   }
 }
 
-const ALLOWED_ITEM_TYPES = new Set(["agent_message", "reasoning"]);
+const NON_SIDE_EFFECTING_ITEM_TYPES = new Set([
+  "agent_message",
+  "reasoning",
+  "todo_list",
+  "error"
+]);
 
 export function assertNoToolActivity(eventTypes: string[]): void {
-  const disallowed = eventTypes.find((type) => !ALLOWED_ITEM_TYPES.has(type));
-  if (disallowed) {
-    throw new AnalysisProviderError(
+  const disallowed = [
+    ...new Set(
+      eventTypes.filter((type) => !NON_SIDE_EFFECTING_ITEM_TYPES.has(type))
+    )
+  ];
+  if (disallowed.length) {
+    const error = new AnalysisProviderError(
       "tool_activity",
-      `分析运行包含不允许的工具事件：${disallowed}`,
+      `分析运行包含不允许的工具事件：${disallowed.join("、")}`,
       false
     );
+    error.eventTypes = [...eventTypes];
+    throw error;
   }
 }
 

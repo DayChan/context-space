@@ -84,12 +84,23 @@ export interface PersonIdentity {
   display_name?: string;
 }
 
+export type PersonInsightCategory =
+  | "responsibility"
+  | "communication_style"
+  | "collaboration_style"
+  | "work_preference";
+
 export interface PersonObservation {
   text: string;
   evidence: string[];
   confidence: number;
   observed_at: string;
   origin: "manual" | "inferred";
+  category?: PersonInsightCategory;
+  source_refs?: string[];
+  insight_key?: string;
+  stale?: boolean;
+  superseded_at?: string;
 }
 
 export interface PersonMetadata extends BaseMetadata {

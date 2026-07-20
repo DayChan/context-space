@@ -1,12 +1,19 @@
 import { z } from "zod";
 
-export const ANALYSIS_SCHEMA_VERSION = "work-context/analysis@1" as const;
+export const ANALYSIS_SCHEMA_VERSION = "work-context/analysis@2" as const;
+
+export const analysisEvidenceSchema = z
+  .object({
+    source_ref: z.string().trim().min(1).max(300),
+    quote: z.string().trim().min(1).max(500)
+  })
+  .strict();
 
 const sharedItemFields = {
   title: z.string().trim().min(1).max(160),
-  source_ref: z.string().trim().min(1).max(300),
+  source_refs: z.array(z.string().trim().min(1).max(300)).min(1).max(20),
   confidence: z.number().min(0).max(1),
-  evidence: z.array(z.string().trim().min(1).max(500)).min(1).max(8),
+  evidence: z.array(analysisEvidenceSchema).min(1).max(16),
   reason: z.string().trim().min(1).max(500)
 };
 
@@ -44,16 +51,36 @@ export const analysisItemSchema = z.discriminatedUnion("kind", [
   analysisKnowledgeItemSchema
 ]);
 
-export const analysisOutputSchema = z
+export const analysisPersonInsightSchema = z
   .object({
-    schema_version: z.literal(ANALYSIS_SCHEMA_VERSION),
-    items: z.array(analysisItemSchema).max(24)
+    person_id: z.string().trim().min(1).max(200),
+    category: z.enum([
+      "responsibility",
+      "communication_style",
+      "collaboration_style",
+      "work_preference"
+    ]),
+    text: z.string().trim().min(1).max(500),
+    source_refs: z.array(z.string().trim().min(1).max(300)).min(1).max(20),
+    confidence: z.number().min(0).max(1),
+    evidence: z.array(analysisEvidenceSchema).min(1).max(16),
+    reason: z.string().trim().min(1).max(500)
   })
   .strict();
 
+export const analysisOutputSchema = z
+  .object({
+    schema_version: z.literal(ANALYSIS_SCHEMA_VERSION),
+    items: z.array(analysisItemSchema).max(64),
+    person_insights: z.array(analysisPersonInsightSchema).max(64)
+  })
+  .strict();
+
+export type AnalysisEvidence = z.infer<typeof analysisEvidenceSchema>;
 export type AnalysisTodoItem = z.infer<typeof analysisTodoItemSchema>;
 export type AnalysisKnowledgeItem = z.infer<typeof analysisKnowledgeItemSchema>;
 export type AnalysisItem = z.infer<typeof analysisItemSchema>;
+export type AnalysisPersonInsight = z.infer<typeof analysisPersonInsightSchema>;
 export type AnalysisOutput = z.infer<typeof analysisOutputSchema>;
 
 function toCodexCompatibleJsonSchema(value: unknown): unknown {

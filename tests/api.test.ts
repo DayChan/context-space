@@ -10,6 +10,11 @@ import type {
 import type { CommandRunner } from "../src/adapters/lark/runner";
 import { createTodoMetadata } from "../src/core/todo";
 import type { SourceMetadata } from "../src/core/types";
+import {
+  createConfiguredLogger,
+  type Logger,
+  type LoggingConfig
+} from "../src/logging";
 import { createApp } from "../src/server/app";
 
 class EmptyRunner implements CommandRunner {
@@ -35,8 +40,9 @@ class ApiAnalysisProvider implements AnalysisProvider {
     this.calls += 1;
     return {
       finalResponse: JSON.stringify({
-        schema_version: "work-context/analysis@1",
-        items: []
+        schema_version: "work-context/analysis@2",
+        items: [],
+        person_insights: []
       }),
       model: null,
       usage: null,
@@ -50,20 +56,41 @@ describe("local API", () => {
   let context: Awaited<ReturnType<typeof createApp>>;
   let sdkProvider: ApiAnalysisProvider;
   let execProvider: ApiAnalysisProvider;
+  let logger: Logger;
+  let logEntries: Array<Record<string, unknown>>;
 
   beforeEach(async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "context-space-api-"));
     sdkProvider = new ApiAnalysisProvider("codex-sdk");
     execProvider = new ApiAnalysisProvider("codex-exec");
+    logEntries = [];
+    const loggingConfig: LoggingConfig = {
+      level: "trace",
+      consoleEnabled: true,
+      fileEnabled: false,
+      directory: path.join(root, ".context", "logs"),
+      maxFileBytes: 10 * 1024 * 1024,
+      retentionDays: 14,
+      service: "context-space"
+    };
+    logger = createConfiguredLogger({
+      config: loggingConfig,
+      stdout: (line) =>
+        logEntries.push(JSON.parse(line) as Record<string, unknown>),
+      stderr: (line) =>
+        logEntries.push(JSON.parse(line) as Record<string, unknown>)
+    });
     context = await createApp({
       workspaceRoot: root,
       commandRunner: new EmptyRunner(),
       analysisProviders: [sdkProvider, execProvider],
-      environment: {}
+      environment: {},
+      logger
     });
   });
 
   afterEach(async () => {
+    await logger.close();
     await rm(root, { recursive: true, force: true });
   });
 
@@ -112,10 +139,11 @@ describe("local API", () => {
   it("switches providers without making an analysis call", async () => {
     await request(context.app)
       .put("/api/config/analysis")
-      .send({ provider: "codex-exec" })
+      .send({ provider: "codex-exec", model: "test-model" })
       .expect(200);
     const config = await request(context.app).get("/api/config").expect(200);
     expect(config.body.analysis.current_provider).toBe("codex-exec");
+    expect(config.body.analysis.config.model).toBe("test-model");
     expect(sdkProvider.calls).toBe(0);
     expect(execProvider.calls).toBe(0);
     await request(context.app)
@@ -174,5 +202,72 @@ describe("local API", () => {
     expect(result.body.requested).toBe(1);
     expect(result.body.succeeded).toBe(1);
     expect(sdkProvider.calls).toBe(1);
+  });
+
+  it("correlates HTTP logs without recording query values or request bodies", async () => {
+    const secretQuery = "private-query-value";
+    const successful = await request(context.app)
+      .get(`/api/search?q=${secretQuery}`)
+      .set("x-request-id", "request-safe-1")
+      .expect(200);
+    expect(successful.headers["x-request-id"]).toBe("request-safe-1");
+
+    const failed = await request(context.app)
+      .put("/api/config/leaders")
+      .set("x-request-id", "request-error-1")
+      .send([{ person_id: "alice", boost: 999 }])
+      .expect(400);
+    expect(failed.headers["x-request-id"]).toBe("request-error-1");
+
+    const [left, right, regenerated] = await Promise.all([
+      request(context.app)
+        .get("/api/health")
+        .set("x-request-id", "request-left")
+        .expect(200),
+      request(context.app)
+        .get("/api/health")
+        .set("x-request-id", "request-right")
+        .expect(200),
+      request(context.app)
+        .get("/api/health")
+        .set("x-request-id", "unsafe request id")
+        .expect(200)
+    ]);
+    expect(left.headers["x-request-id"]).toBe("request-left");
+    expect(right.headers["x-request-id"]).toBe("request-right");
+    expect(regenerated.headers["x-request-id"]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
+    await logger.flush();
+
+    expect(JSON.stringify(logEntries)).not.toContain(secretQuery);
+    expect(JSON.stringify(logEntries)).not.toContain('"boost":999');
+    expect(logEntries).toContainEqual(
+      expect.objectContaining({
+        event: "http.request.completed",
+        request_id: "request-safe-1",
+        method: "GET",
+        path: "/api/search",
+        status_code: 200
+      })
+    );
+    expect(logEntries).toContainEqual(
+      expect.objectContaining({
+        event: "http.request.failed",
+        request_id: "request-error-1",
+        status_code: 400
+      })
+    );
+    expect(
+      logEntries
+        .filter(({ event }) => event === "http.request.completed")
+        .map(({ request_id }) => request_id)
+    ).toEqual(
+      expect.arrayContaining([
+        "request-left",
+        "request-right",
+        "request-error-1"
+      ])
+    );
   });
 });

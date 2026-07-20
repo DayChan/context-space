@@ -4,7 +4,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Overview, SyncStatus, TodoMetadata } from "../src/core/types";
+import type {
+  Overview,
+  PersonMetadata,
+  SyncStatus,
+  TodoMetadata
+} from "../src/core/types";
 import { DEFAULT_AUTOMATION, EMPTY_SYNC_STATUS } from "../src/core/types";
 import { AppView } from "../src/web/App";
 
@@ -29,8 +34,8 @@ const owedTodo: TodoMetadata = {
     run_id: "analysis_run_123",
     item_key: "item_123",
     provider: "codex-sdk",
-    prompt_version: "context-analysis@1",
-    schema_version: "work-context/analysis@1",
+    prompt_version: "context-analysis@2",
+    schema_version: "work-context/analysis@2",
     analyzed_at: "2026-07-20T01:00:00Z",
     evidence: ["准备发布计划"],
     reason: "明确行动项"
@@ -50,6 +55,42 @@ const waitingTodo: TodoMetadata = {
   title: "等待 Alice 评审",
   direction: "waiting_on_them",
   priority: { ...owedTodo.priority, effective: 58, reasons: [] }
+};
+
+const personWithInsight: PersonMetadata = {
+  schema: "work-context/person@1",
+  id: "person_alice",
+  type: "person",
+  title: "Alice",
+  managed: "hybrid",
+  created_at: "2026-07-20T00:00:00Z",
+  updated_at: "2026-07-20T02:00:00Z",
+  source_refs: ["lark:message:person_1", "lark:message:person_2"],
+  identities: [
+    {
+      provider: "lark",
+      external_id: "ou_alice",
+      display_name: "Alice"
+    }
+  ],
+  role: null,
+  role_origin: null,
+  is_leader: false,
+  leader_boost: 20,
+  observations: [
+    {
+      text: "在关键评审前主动汇总阻塞项。",
+      evidence: ["Alice 负责发布流程", "Alice 会在评审前汇总阻塞项"],
+      confidence: 0.86,
+      observed_at: "2026-07-20T02:00:00Z",
+      origin: "inferred",
+      category: "collaboration_style",
+      source_refs: ["lark:message:person_1", "lark:message:person_2"],
+      insight_key: "insight_1",
+      stale: false
+    }
+  ],
+  last_interaction_at: "2026-07-20T02:00:00Z"
 };
 
 const overview: Overview = {
@@ -78,6 +119,7 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 }
 
 let selectedProvider = "codex-sdk";
+let selectedModel: string | null = null;
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
 
 function configResponse() {
@@ -91,11 +133,13 @@ function configResponse() {
       provider_locked: false,
       config: {
         provider: selectedProvider,
-        model: null,
+        model: selectedModel,
         timeout_ms: 120000,
         max_source_chars: 20000,
+        max_batch_records: 50,
+        max_batch_source_chars: 60000,
         max_output_bytes: 2000000,
-        prompt_version: "context-analysis@1",
+        prompt_version: "context-analysis@2",
         retain_runs: 50,
         max_reanalysis_records: 50
       },
@@ -103,8 +147,8 @@ function configResponse() {
         { id: "codex-sdk", available: true, detail: "SDK 可用" },
         { id: "codex-exec", available: true, detail: "CLI 可用" }
       ],
-      prompt_version: "context-analysis@1",
-      schema_version: "work-context/analysis@1",
+      prompt_version: "context-analysis@2",
+      schema_version: "work-context/analysis@2",
       status: {
         schema: "work-context/analysis-status@1",
         id: "analysis_status",
@@ -129,15 +173,22 @@ function configResponse() {
 beforeEach(() => {
   vi.restoreAllMocks();
   selectedProvider = "codex-sdk";
+  selectedModel = null;
   larkStatus = EMPTY_SYNC_STATUS;
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/config/analysis") {
-        const body = JSON.parse(String(init?.body ?? "{}")) as { provider?: string };
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          provider?: string;
+          model?: string | null;
+        };
         if (body.provider) selectedProvider = body.provider;
-        return jsonResponse({ config: { provider: selectedProvider } });
+        if ("model" in body) selectedModel = body.model ?? null;
+        return jsonResponse({
+          config: { provider: selectedProvider, model: selectedModel }
+        });
       }
       if (url === "/api/sync/lark") return jsonResponse(larkStatus);
       if (url === "/api/config") return jsonResponse(configResponse());
@@ -161,6 +212,19 @@ beforeEach(() => {
           data: owedTodo,
           body: "# 准备发布计划\n\n来自群聊上下文。",
           etag: "1"
+        });
+      }
+      if (url.startsWith("/api/documents/person_alice")) {
+        return jsonResponse({
+          path: "people/person_alice.md",
+          data: personWithInsight,
+          body: "# Alice",
+          etag: "person-etag",
+          relationships: {
+            owedByMe: [],
+            waitingOnThem: [],
+            shared: []
+          }
         });
       }
       return jsonResponse([]);
@@ -194,7 +258,16 @@ describe("Context Space workbench", () => {
     expect(screen.getByText("外部执行不可用")).toBeInTheDocument();
     expect(screen.getByText("需要人工确认")).toBeInTheDocument();
     expect(screen.getByText("codex-sdk")).toBeInTheDocument();
-    expect(screen.getByText("context-analysis@1")).toBeInTheDocument();
+    expect(screen.getByText("context-analysis@2")).toBeInTheDocument();
+  });
+
+  it("shows categorized, evidence-backed person observations", async () => {
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/documents/person_alice"]}><AppView /></MemoryRouter>);
+    expect(await screen.findByText("职场观察")).toBeInTheDocument();
+    expect(screen.getByText("协作方式")).toBeInTheDocument();
+    expect(screen.getByText("在关键评审前主动汇总阻塞项。")).toBeInTheDocument();
+    expect(screen.getByText("Alice 会在评审前汇总阻塞项")).toBeInTheDocument();
+    expect(screen.getByText(/86%/)).toBeInTheDocument();
   });
 
   it("keeps Loop visible and explicitly inert", async () => {
@@ -219,6 +292,28 @@ describe("Context Space workbench", () => {
       "/api/config/analysis",
       expect.objectContaining({ method: "PUT" })
     );
+  });
+
+  it("saves and clears the model override for future analysis", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+    const input = await screen.findByLabelText("LLM 分析模型");
+    await user.type(input, "test-model");
+    await user.click(screen.getByRole("button", { name: "保存模型" }));
+    expect(
+      await screen.findByText(
+        "后续分析将使用模型 test-model；可用性由当前 Codex 认证决定。"
+      )
+    ).toBeInTheDocument();
+    expect(selectedModel).toBe("test-model");
+
+    const savedInput = await screen.findByLabelText("LLM 分析模型");
+    await user.clear(savedInput);
+    await user.click(screen.getByRole("button", { name: "保存模型" }));
+    expect(
+      await screen.findByText("已清空模型覆盖；后续分析使用 Codex 当前默认模型。")
+    ).toBeInTheDocument();
+    expect(selectedModel).toBeNull();
   });
 
   it("shows actionable Lark permission and CLI update reminders", async () => {

@@ -18,7 +18,14 @@ const SENSITIVE_TERMS = [
   "疾病",
   "性取向",
   "民族",
-  "种族"
+  "种族",
+  "mbti",
+  "人格障碍",
+  "心理诊断",
+  "精神疾病",
+  "适合晋升",
+  "不适合任职",
+  "招聘适配"
 ];
 
 export function personIdForIdentity(provider: string, externalId: string): string {

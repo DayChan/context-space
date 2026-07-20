@@ -5,6 +5,7 @@ import type {
   LarkSyncIssue,
   LarkSyncIssueKind
 } from "../../core/types";
+import { nullLogger, type Logger } from "../../logging";
 
 const execFileAsync = promisify(execFile);
 
@@ -187,10 +188,27 @@ export function prepareReadOnlyLarkArgs(args: string[]): string[] {
 }
 
 export class LarkCliCommandRunner implements CommandRunner {
-  constructor(private readonly binary = "lark-cli") {}
+  private readonly logger: Logger;
+
+  constructor(
+    private readonly binary = "lark-cli",
+    logger: Logger = nullLogger
+  ) {
+    this.logger = logger.child({ component: "lark-cli" });
+  }
 
   async run(args: string[]): Promise<unknown> {
     const normalized = prepareReadOnlyLarkArgs(args);
+    const command = `${normalized[0] ?? "unknown"} ${normalized[1] ?? ""}`.trim();
+    const argumentNames = [
+      ...new Set(normalized.filter((argument) => argument.startsWith("--")))
+    ].sort();
+    const started = process.hrtime.bigint();
+    let outputBytes = 0;
+    this.logger.info("lark.cli.started", {
+      command,
+      argument_names: argumentNames
+    });
     try {
       const { stdout } = await execFileAsync(this.binary, normalized, {
         encoding: "utf8",
@@ -198,19 +216,64 @@ export class LarkCliCommandRunner implements CommandRunner {
         timeout: 120_000,
         shell: false
       });
+      outputBytes = Buffer.byteLength(stdout, "utf8");
       const parsed = JSON.parse(stdout) as Record<string, unknown>;
       if (parsed.ok === false) {
         const issue = parseLarkCliIssue(parsed);
         if (issue) throw new LarkCliCommandError(issue);
         throw new Error("lark-cli returned an unsuccessful response");
       }
+      this.logger.info("lark.cli.completed", {
+        command,
+        argument_names: argumentNames,
+        output_bytes: outputBytes,
+        duration_ms:
+          Math.round(
+            (Number(process.hrtime.bigint() - started) / 1_000_000) * 100
+          ) / 100
+      });
       return parsed.data ?? parsed;
     } catch (error) {
-      if (error instanceof LarkCliCommandError) throw error;
       const processError = error as { stderr?: unknown; stdout?: unknown };
+      if (!outputBytes && typeof processError.stdout === "string") {
+        outputBytes = Buffer.byteLength(processError.stdout, "utf8");
+      }
       const issue =
-        parseLarkCliIssue(processError.stderr) ?? parseLarkCliIssue(processError.stdout);
-      if (issue) throw new LarkCliCommandError(issue, { cause: error });
+        error instanceof LarkCliCommandError
+          ? error.issue
+          : parseLarkCliIssue(processError.stderr) ??
+            parseLarkCliIssue(processError.stdout);
+      const normalizedError = error instanceof LarkCliCommandError
+        ? error
+        : issue
+        ? new LarkCliCommandError(issue, { cause: error })
+        : error;
+      const fields = {
+        command,
+        argument_names: argumentNames,
+        output_bytes: outputBytes,
+        duration_ms:
+          Math.round(
+            (Number(process.hrtime.bigint() - started) / 1_000_000) * 100
+          ) / 100,
+        ...(issue
+          ? {
+              issue_kind: issue.kind,
+              issue_code: issue.code,
+              log_id: issue.log_id,
+              requires_action: issue.requires_action,
+              missing_scope_count: issue.missing_scopes?.length ?? 0,
+              update_available: Boolean(issue.update)
+            }
+          : {}),
+        error: normalizedError
+      };
+      if (issue?.requires_action || issue?.kind === "invalid_parameters") {
+        this.logger.warn("lark.cli.failed", fields);
+      } else {
+        this.logger.error("lark.cli.failed", fields);
+      }
+      if (issue) throw normalizedError;
       throw error;
     }
   }

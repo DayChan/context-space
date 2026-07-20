@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,6 +15,7 @@ import { normalizeTasks } from "../src/adapters/lark/normalize";
 import {
   assertReadOnlyLarkCommand,
   LarkCliCommandError,
+  LarkCliCommandRunner,
   parseLarkCliIssue,
   type CommandRunner,
   prepareReadOnlyLarkArgs,
@@ -23,9 +24,41 @@ import {
 import { LarkSyncService } from "../src/adapters/lark/sync";
 import { ContextIndex } from "../src/core/index";
 import { initializeWorkspace } from "../src/core/workspace";
+import {
+  createConfiguredLogger,
+  type Logger,
+  type LoggingConfig
+} from "../src/logging";
+
+function memoryLogger(root: string): {
+  logger: Logger;
+  entries: Array<Record<string, unknown>>;
+} {
+  const entries: Array<Record<string, unknown>> = [];
+  const config: LoggingConfig = {
+    level: "trace",
+    consoleEnabled: true,
+    fileEnabled: false,
+    directory: path.join(root, ".context", "logs"),
+    maxFileBytes: 10 * 1024 * 1024,
+    retentionDays: 14,
+    service: "context-space"
+  };
+  return {
+    entries,
+    logger: createConfiguredLogger({
+      config,
+      stdout: (line) =>
+        entries.push(JSON.parse(line) as Record<string, unknown>),
+      stderr: (line) =>
+        entries.push(JSON.parse(line) as Record<string, unknown>)
+    })
+  };
+}
 
 class FakeAnalysisProvider implements AnalysisProvider {
   readonly id = "codex-sdk";
+  calls: ProviderAnalysisRequest[] = [];
 
   constructor(private readonly shouldFail = false) {}
 
@@ -34,29 +67,44 @@ class FakeAnalysisProvider implements AnalysisProvider {
   }
 
   async analyze(request: ProviderAnalysisRequest): Promise<ProviderAnalysisResponse> {
+    this.calls.push(request);
     if (this.shouldFail) throw new Error("simulated model outage");
-    const sourceId = request.prompt.match(/"source_ref":"([^"]+)"/)?.[1] ?? "";
-    const evidence = request.prompt.includes("跟进设计")
-      ? "请你跟进设计"
-      : "请你准备发布计划";
+    const payload = request.prompt
+      .split("\n")
+      .map((line) => {
+        try {
+          return JSON.parse(line) as {
+            sources?: Array<{ source_ref: string; source_body: string }>;
+          };
+        } catch {
+          return null;
+        }
+      })
+      .find((value) => value?.sources)?.sources ?? [];
     return {
       finalResponse: JSON.stringify({
-        schema_version: "work-context/analysis@1",
-        items: [
-          {
+        schema_version: "work-context/analysis@2",
+        items: payload.flatMap(({ source_ref, source_body }) => {
+          const evidence = source_body.includes("跟进设计")
+            ? "请你跟进设计"
+            : source_body.includes("准备发布计划")
+              ? "请你准备发布计划"
+              : null;
+          return evidence ? [{
             kind: "todo",
             title: evidence,
-            source_ref: sourceId,
+            source_refs: [source_ref],
             confidence: 0.9,
-            evidence: [evidence],
+            evidence: [{ source_ref, quote: evidence }],
             reason: "消息明确要求当前用户完成工作",
             status: "open",
             direction: "owed_by_me",
             due_at: null,
             explicit: true,
             stakeholders: []
-          }
-        ]
+          }] : [];
+        }),
+        person_insights: []
       }),
       model: "fake",
       usage: null,
@@ -68,13 +116,15 @@ class FakeAnalysisProvider implements AnalysisProvider {
 function createAnalysis(
   store: Awaited<ReturnType<typeof initializeWorkspace>>,
   index: ContextIndex,
-  provider: AnalysisProvider = new FakeAnalysisProvider()
+  provider: AnalysisProvider = new FakeAnalysisProvider(),
+  logger?: Logger
 ): AnalysisCoordinator {
   return new AnalysisCoordinator(
     store,
     index,
     new AnalysisProviderRegistry([provider]),
-    new AnalysisConfigService(store, {})
+    new AnalysisConfigService(store, {}),
+    logger
   );
 }
 
@@ -308,6 +358,70 @@ describe("read-only Lark adapter", () => {
     expect(result.result.error).toContain("飞书权限不足");
   });
 
+  it("logs lark-cli command metadata and structured issues without raw output", async () => {
+    const successBinary = path.join(root, "lark-cli-success");
+    await writeFile(
+      successBinary,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ok:true,data:{open_id:'ou_private_value',name:'Private'}}));"
+      ].join("\n"),
+      { mode: 0o700 }
+    );
+    await chmod(successBinary, 0o700);
+    const successLogs = memoryLogger(root);
+    const successRunner = new LarkCliCommandRunner(
+      successBinary,
+      successLogs.logger
+    );
+    await successRunner.run(["contact", "+get-user"]);
+    await successLogs.logger.flush();
+    expect(successLogs.entries).toContainEqual(
+      expect.objectContaining({
+        event: "lark.cli.completed",
+        command: "contact +get-user",
+        argument_names: ["--as"],
+        output_bytes: expect.any(Number)
+      })
+    );
+    expect(JSON.stringify(successLogs.entries)).not.toContain(
+      "ou_private_value"
+    );
+
+    const failureBinary = path.join(root, "lark-cli-failure");
+    await writeFile(
+      failureBinary,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ok:false,error:{type:'authorization',subtype:'missing_scope',code:99991679,message:'missing scope',missing_scopes:['im:message:readonly'],log_id:'log_safe'},raw:'private-response-body'}));"
+      ].join("\n"),
+      { mode: 0o700 }
+    );
+    await chmod(failureBinary, 0o700);
+    const failureLogs = memoryLogger(root);
+    const failureRunner = new LarkCliCommandRunner(
+      failureBinary,
+      failureLogs.logger
+    );
+    await expect(
+      failureRunner.run(["im", "+messages-search", "--is-at-me"])
+    ).rejects.toBeInstanceOf(LarkCliCommandError);
+    await failureLogs.logger.flush();
+    expect(failureLogs.entries).toContainEqual(
+      expect.objectContaining({
+        event: "lark.cli.failed",
+        command: "im +messages-search",
+        issue_kind: "permission",
+        issue_code: 99991679,
+        log_id: "log_safe",
+        requires_action: true
+      })
+    );
+    expect(JSON.stringify(failureLogs.entries)).not.toContain(
+      "private-response-body"
+    );
+  });
+
   it("normalizes all supported sources", async () => {
     const runner = new FakeRunner();
     const adapter = new LarkAdapter(runner);
@@ -328,7 +442,8 @@ describe("read-only Lark adapter", () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
-    const analysis = createAnalysis(store, index);
+    const provider = new FakeAnalysisProvider();
+    const analysis = createAnalysis(store, index, provider);
     const first = new LarkSyncService(
       store,
       index,
@@ -343,6 +458,9 @@ describe("read-only Lark adapter", () => {
       overlapMinutes: 10
     });
     expect(firstStatus.results.every((result) => result.ok)).toBe(true);
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0].prompt).toContain("lark:message:om_mention");
+    expect(provider.calls[0].prompt).toContain("lark:message:om_p2p");
     const sourceCount = index.search("", "source").length;
     const secondStatus = await first.sync({
       now: new Date("2026-07-20T12:05:00Z"),
@@ -352,6 +470,7 @@ describe("read-only Lark adapter", () => {
     });
     expect(index.search("", "source")).toHaveLength(sourceCount);
     expect(secondStatus.results.find((result) => result.source === "mentions")?.persisted).toBe(0);
+    expect(provider.calls).toHaveLength(1);
 
     const partial = new LarkSyncService(
       store,
@@ -376,11 +495,18 @@ describe("read-only Lark adapter", () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
+    const logs = memoryLogger(root);
     const sync = new LarkSyncService(
       store,
       index,
       new LarkAdapter(new FakeRunner()),
-      createAnalysis(store, index, new FakeAnalysisProvider(true))
+      createAnalysis(
+        store,
+        index,
+        new FakeAnalysisProvider(true),
+        logs.logger
+      ),
+      logs.logger
     );
     const status = await sync.sync({
       now: new Date("2026-07-20T12:00:00Z"),
@@ -397,6 +523,34 @@ describe("read-only Lark adapter", () => {
       (checkpoint.data.source_checkpoints as Record<string, unknown>).mentions
     ).toBeDefined();
     expect(index.byId("lark:message:om_mention")).toBeDefined();
+    await logs.logger.flush();
+    const syncIds = logs.entries
+      .filter(({ event }) =>
+        [
+          "lark.sync.started",
+          "lark.sync.source.completed",
+          "analysis.batch.failed",
+          "lark.sync.completed"
+        ].includes(String(event))
+      )
+      .map(({ sync_id }) => sync_id);
+    expect(new Set(syncIds).size).toBe(1);
+    expect(logs.entries).toContainEqual(
+      expect.objectContaining({
+        event: "analysis.batch.failed",
+        error_code: "provider_failed",
+        sync_id: syncIds[0],
+        run_id: expect.any(String)
+      })
+    );
+    expect(logs.entries).toContainEqual(
+      expect.objectContaining({
+        event: "lark.sync.analysis.completed",
+        failed: 2,
+        sync_id: syncIds[0]
+      })
+    );
+    expect(JSON.stringify(logs.entries)).not.toContain("请你跟进设计");
   });
 
   it("persists actionable permission issues in synchronization status", async () => {
@@ -420,11 +574,13 @@ describe("read-only Lark adapter", () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
+    const logs = memoryLogger(root);
     const sync = new LarkSyncService(
       store,
       index,
       new LarkAdapter(runner),
-      createAnalysis(store, index)
+      createAnalysis(store, index, undefined, logs.logger),
+      logs.logger
     );
 
     const status = await sync.sync({
@@ -443,5 +599,14 @@ describe("read-only Lark adapter", () => {
     const persisted = await store.read(".context/sync/lark-status.md");
     const results = persisted.data.results as unknown as Array<{ issue?: { kind?: string } }>;
     expect(results.find((result) => result.issue)?.issue?.kind).toBe("permission");
+    await logs.logger.flush();
+    expect(logs.entries).toContainEqual(
+      expect.objectContaining({
+        event: "lark.sync.window.failed",
+        source: "calendar",
+        issue_kind: "permission",
+        requires_action: true
+      })
+    );
   });
 });

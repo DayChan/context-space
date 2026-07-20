@@ -9,18 +9,22 @@ export const DEFAULT_ANALYSIS_CONFIG: AnalysisConfig = {
   model: null,
   timeout_ms: 120_000,
   max_source_chars: 20_000,
+  max_batch_records: 50,
+  max_batch_source_chars: 60_000,
   max_output_bytes: 2_000_000,
   prompt_version: ANALYSIS_PROMPT_VERSION,
   retain_runs: 50,
   max_reanalysis_records: 50
 };
 
-export const analysisConfigSchema = z
+const analysisConfigObjectSchema = z
   .object({
     provider: z.string().trim().min(1).max(80),
     model: z.string().trim().min(1).max(200).nullable(),
     timeout_ms: z.number().int().min(1_000).max(600_000),
     max_source_chars: z.number().int().min(500).max(100_000),
+    max_batch_records: z.number().int().min(1).max(500),
+    max_batch_source_chars: z.number().int().min(1_000).max(500_000),
     max_output_bytes: z.number().int().min(16_384).max(10_000_000),
     prompt_version: z.literal(ANALYSIS_PROMPT_VERSION),
     retain_runs: z.number().int().min(1).max(500),
@@ -28,7 +32,19 @@ export const analysisConfigSchema = z
   })
   .strict();
 
-const analysisConfigUpdateSchema = analysisConfigSchema.partial();
+export const analysisConfigSchema = analysisConfigObjectSchema.superRefine(
+  (config, context) => {
+    if (config.max_batch_source_chars < config.max_source_chars) {
+      context.addIssue({
+        code: "custom",
+        path: ["max_batch_source_chars"],
+        message: "整批来源字符上限不得小于单条来源字符上限"
+      });
+    }
+  }
+);
+
+const analysisConfigUpdateSchema = analysisConfigObjectSchema.partial();
 
 export class AnalysisConfigService {
   constructor(

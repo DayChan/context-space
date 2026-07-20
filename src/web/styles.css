@@ -266,8 +266,10 @@ a { color: inherit; text-decoration: none; }
 .lark-issue-links { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
 .lark-issue-links a { display: inline-flex; align-items: center; gap: 3px; color: inherit; font-size: 8px; font-weight: 700; }
 .provider-control { margin-top: 16px; display: grid; gap: 6px; color: #8c9092; font-size: 9px; }
-.provider-control select { width: 100%; padding: 10px; border: 1px solid #d9d5cc; border-radius: 8px; color: #384653; background: #f7f5ef; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
-.provider-control select:disabled { color: #8e8e8b; cursor: not-allowed; }
+.provider-control select, .provider-control input { width: 100%; padding: 10px; border: 1px solid #d9d5cc; border-radius: 8px; color: #384653; background: #f7f5ef; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.provider-control select:disabled, .provider-control input:disabled { color: #8e8e8b; cursor: not-allowed; }
+.model-control { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 8px; }
+.model-control .secondary-button { margin-bottom: 0; }
 .provider-list { margin-top: 12px; display: grid; gap: 7px; }
 .provider-list > div { padding: 8px; display: flex; align-items: center; gap: 8px; border-radius: 8px; background: #f2f0ea; }
 .provider-list > div > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; }
@@ -315,6 +317,15 @@ a { color: inherit; text-decoration: none; }
 .source-refs { display: flex; flex-direction: column; gap: 6px; }
 .source-refs code { padding: 7px; overflow: hidden; border-radius: 6px; color: #5d6973; background: #eeece6; font-size: 8px; text-overflow: ellipsis; }
 .confidence { margin-top: 12px; display: flex; justify-content: space-between; color: #929697; font-size: 9px; }
+.observation-list { display: grid; gap: 9px; }
+.observation { padding: 10px; border: 1px solid #e3ddea; border-radius: 9px; background: #f7f4fa; }
+.observation.stale { opacity: .62; }
+.observation-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.observation-head span { color: #96999b; font-size: 8px; }
+.observation > strong { display: block; margin-top: 8px; font-size: 10px; line-height: 1.55; }
+.observation ul { margin: 7px 0 0; padding-left: 16px; color: #737b82; font-size: 8px; line-height: 1.6; }
+.observation-sources { margin-top: 7px; display: grid; gap: 4px; }
+.observation-sources code { overflow: hidden; color: #858a8e; font-size: 7px; text-overflow: ellipsis; }
 
 @media (max-width: 1120px) {
   .three-column, .loop-columns { grid-template-columns: repeat(2, 1fr); }

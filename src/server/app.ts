@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
@@ -35,6 +36,11 @@ import type {
 } from "../core/types";
 import { nowIso } from "../core/types";
 import { initializeWorkspace } from "../core/workspace";
+import {
+  createLogger,
+  withLogContext,
+  type Logger
+} from "../logging";
 
 const leadersSchema = z.array(
   z.object({
@@ -72,6 +78,7 @@ export interface Runtime {
   analysis: AnalysisCoordinator;
   analysisConfig: AnalysisConfigService;
   analysisProviders: AnalysisProviderRegistry;
+  logger: Logger;
   getLeaders(): Promise<LeaderConfig[]>;
 }
 
@@ -81,6 +88,7 @@ export interface CreateAppOptions {
   analysisProviders?: AnalysisProvider[];
   environment?: NodeJS.ProcessEnv;
   staticRoot?: string;
+  logger?: Logger;
 }
 
 function isTodo(document: WorkspaceDocument): document is WorkspaceDocument<TodoMetadata> {
@@ -89,6 +97,30 @@ function isTodo(document: WorkspaceDocument): document is WorkspaceDocument<Todo
 
 function isPerson(document: WorkspaceDocument): document is WorkspaceDocument<PersonMetadata> {
   return document.data.type === "person";
+}
+
+function safeRequestId(value: string | undefined): string {
+  return value && /^[A-Za-z0-9._:-]{1,128}$/.test(value)
+    ? value
+    : randomUUID();
+}
+
+function requestLogPath(request: Request): string {
+  const route = request.route as { path?: unknown } | undefined;
+  const routePath = typeof route?.path === "string" ? route.path : null;
+  return routePath ? `${request.baseUrl}${routePath}` : request.path;
+}
+
+function errorStatus(error: unknown): number {
+  if (error instanceof DocumentConflictError) return 409;
+  if (
+    error instanceof UnsafeWorkspacePathError ||
+    error instanceof InvalidDocumentError ||
+    error instanceof z.ZodError
+  ) {
+    return 400;
+  }
+  return 500;
 }
 
 async function apiDocument(
@@ -125,10 +157,25 @@ export async function createApp(options: CreateAppOptions): Promise<{
   app: express.Express;
   runtime: Runtime;
 }> {
-  const store = await initializeWorkspace(options.workspaceRoot);
+  const environment = options.environment ?? process.env;
+  const logger =
+    options.logger ??
+    createLogger({
+      workspaceRoot: options.workspaceRoot,
+      environment: { ...process.env, ...environment }
+    });
+  const serverLogger = logger.child({ component: "server" });
+  serverLogger.info("application.initializing");
+  let store: MarkdownStore;
+  try {
+    store = await initializeWorkspace(options.workspaceRoot);
+  } catch (error) {
+    serverLogger.fatal("application.initialization.failed", { error });
+    await logger.flush();
+    throw error;
+  }
   const index = new ContextIndex();
   await index.rebuild(store);
-  const environment = options.environment ?? process.env;
   const analysisConfig = new AnalysisConfigService(store, environment);
   const analysisProviders = new AnalysisProviderRegistry(
     options.analysisProviders ?? [
@@ -136,9 +183,23 @@ export async function createApp(options: CreateAppOptions): Promise<{
       new CodexExecProvider({ environment })
     ]
   );
-  const analysis = new AnalysisCoordinator(store, index, analysisProviders, analysisConfig);
-  const runner = options.commandRunner ?? new LarkCliCommandRunner();
-  const sync = new LarkSyncService(store, index, new LarkAdapter(runner), analysis);
+  const analysis = new AnalysisCoordinator(
+    store,
+    index,
+    analysisProviders,
+    analysisConfig,
+    logger
+  );
+  const runner =
+    options.commandRunner ??
+    new LarkCliCommandRunner("lark-cli", logger);
+  const sync = new LarkSyncService(
+    store,
+    index,
+    new LarkAdapter(runner),
+    analysis,
+    logger
+  );
   await sync.loadStatus();
 
   const runtime: Runtime = {
@@ -148,6 +209,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
     analysis,
     analysisConfig,
     analysisProviders,
+    logger,
     async getLeaders() {
       const document = await store.read("config/priority-people.md");
       const parsed = leadersSchema.safeParse(document.data.leaders);
@@ -157,6 +219,40 @@ export async function createApp(options: CreateAppOptions): Promise<{
 
   const app = express();
   app.disable("x-powered-by");
+  app.use((request, response, next) => {
+    const requestId = safeRequestId(request.get("x-request-id"));
+    const started = process.hrtime.bigint();
+    let completed = false;
+    response.setHeader("x-request-id", requestId);
+    withLogContext({ request_id: requestId }, () => {
+      const finish = (aborted: boolean) => {
+        if (completed) return;
+        completed = true;
+        withLogContext({ request_id: requestId }, () => {
+          const durationMs =
+            Number(process.hrtime.bigint() - started) / 1_000_000;
+          const fields = {
+            method: request.method,
+            path: requestLogPath(request),
+            status_code: response.statusCode,
+            duration_ms: Math.round(durationMs * 100) / 100
+          };
+          if (aborted) {
+            serverLogger.warn("http.request.aborted", fields);
+          } else if (response.statusCode >= 500) {
+            serverLogger.error("http.request.completed", fields);
+          } else if (response.statusCode >= 400) {
+            serverLogger.warn("http.request.completed", fields);
+          } else {
+            serverLogger.info("http.request.completed", fields);
+          }
+        });
+      };
+      response.once("finish", () => finish(false));
+      response.once("close", () => finish(!response.writableEnded));
+      next();
+    });
+  });
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/api/health", (_request, response) => {
@@ -403,15 +499,24 @@ export async function createApp(options: CreateAppOptions): Promise<{
       next: NextFunction
     ) => {
       void next;
-      if (error instanceof DocumentConflictError) {
-        response.status(409).json({ error: error.message });
+      const status = errorStatus(error);
+      const fields = {
+        status_code: status,
+        error_type: error instanceof Error ? error.name : typeof error,
+        error
+      };
+      if (status >= 500) {
+        serverLogger.error("http.request.failed", fields);
+      } else {
+        serverLogger.warn("http.request.failed", fields);
+      }
+      if (status === 409) {
+        response.status(409).json({
+          error: error instanceof Error ? error.message : String(error)
+        });
         return;
       }
-      if (
-        error instanceof UnsafeWorkspacePathError ||
-        error instanceof InvalidDocumentError ||
-        error instanceof z.ZodError
-      ) {
+      if (status === 400) {
         response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
         return;
       }
@@ -421,5 +526,9 @@ export async function createApp(options: CreateAppOptions): Promise<{
     }
   );
 
+  serverLogger.info("application.initialized", {
+    index_size: index.size,
+    analysis_provider_count: analysisProviders.all().length
+  });
   return { app, runtime };
 }

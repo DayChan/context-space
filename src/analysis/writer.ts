@@ -2,19 +2,26 @@ import { createHash } from "node:crypto";
 import { ContextIndex } from "../core/index";
 import { MarkdownStore } from "../core/markdown-store";
 import { mapNativeTask } from "../core/analyzer";
+import { discoverPeople, safeObservations } from "../core/people";
 import {
   nowIso,
   type AnalysisProvenance,
   type BaseMetadata,
   type KnowledgeMetadata,
   type NormalizedSourceRecord,
+  type PersonMetadata,
+  type PersonObservation,
   type TodoMetadata,
   type WorkspaceDocument
 } from "../core/types";
 import { createTodoMetadata } from "../core/todo";
 import type { AnalysisRunMetadata } from "./contracts";
-import type { AnalysisItem, AnalysisOutput } from "./schema";
-import { analysisItemKey } from "./validation";
+import type {
+  AnalysisItem,
+  AnalysisOutput,
+  AnalysisPersonInsight
+} from "./schema";
+import { analysisItemKey, personInsightKey } from "./validation";
 
 function safeSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 140);
@@ -36,7 +43,7 @@ function provenance(
     prompt_version: run.prompt_version,
     schema_version: run.output_schema_version,
     analyzed_at: run.completed_at ?? nowIso(),
-    evidence: item.evidence,
+    evidence: item.evidence.map(({ quote }) => quote),
     reason: item.reason,
     stale: false
   };
@@ -54,7 +61,9 @@ function itemBody(item: AnalysisItem): string {
     "",
     "## 证据",
     "",
-    ...item.evidence.map((value) => `- ${value}`),
+    ...item.evidence.map(
+      ({ source_ref, quote }) => `- \`${source_ref}\`：${quote}`
+    ),
     "",
     "## 分析依据",
     "",
@@ -102,22 +111,33 @@ export class DerivedDocumentWriter {
   }
 
   async write(
-    record: NormalizedSourceRecord,
+    input: NormalizedSourceRecord | NormalizedSourceRecord[],
     output: AnalysisOutput,
     run: AnalysisRunMetadata
   ): Promise<number> {
-    const currentKeys = new Set<string>();
+    const records = Array.isArray(input) ? input : [input];
+    const currentKeysBySource = new Map<string, Set<string>>(
+      records.map(({ sourceId }) => [sourceId, new Set()])
+    );
     for (const item of output.items) {
       const itemKey = analysisItemKey(item);
-      currentKeys.add(itemKey);
+      for (const sourceRef of item.source_refs) {
+        currentKeysBySource.get(sourceRef)?.add(itemKey);
+      }
       if (item.kind === "todo") {
         await this.writeTodo(item, itemKey, run);
       } else {
         await this.writeKnowledge(item, itemKey, run);
       }
     }
-    await this.markStale(record.sourceId, currentKeys);
-    return output.items.length;
+    for (const record of records) {
+      await this.markStale(
+        record.sourceId,
+        currentKeysBySource.get(record.sourceId) ?? new Set()
+      );
+    }
+    await this.reconcilePersonInsights(records, output.person_insights, run);
+    return output.items.length + output.person_insights.length;
   }
 
   private async writeTodo(
@@ -137,7 +157,7 @@ export class DerivedDocumentWriter {
       explicit: item.explicit,
       upstream: "extracted_context",
       managed: "hybrid",
-      source_refs: [item.source_ref],
+      source_refs: [...new Set(item.source_refs)],
       confidence: item.confidence
     });
     generated.analysis = provenance(run, item, itemKey);
@@ -180,7 +200,9 @@ export class DerivedDocumentWriter {
           ...generated,
           ...userOwned,
           created_at: existing.data.created_at,
-          source_refs: [...new Set([...existing.data.source_refs, item.source_ref])],
+          source_refs: [
+            ...new Set([...existing.data.source_refs, ...item.source_refs])
+          ],
           updated_at: nowIso()
         },
         existing.body || itemBody(item),
@@ -206,7 +228,7 @@ export class DerivedDocumentWriter {
       managed: "generated",
       created_at: timestamp,
       updated_at: timestamp,
-      source_refs: [item.source_ref],
+      source_refs: [...new Set(item.source_refs)],
       confidence: item.confidence,
       status: "draft",
       knowledge_kind: item.knowledge_kind,
@@ -227,7 +249,9 @@ export class DerivedDocumentWriter {
               ...existing.data,
               analysis: generated.analysis,
               confidence: generated.confidence,
-              source_refs: [...new Set([...existing.data.source_refs, item.source_ref])],
+              source_refs: [
+                ...new Set([...existing.data.source_refs, ...item.source_refs])
+              ],
               updated_at: timestamp
             };
       await this.store.write(path, next, existing.data.managed === "generated" ? itemBody(item) : existing.body, {
@@ -258,6 +282,117 @@ export class DerivedDocumentWriter {
       await this.store.write(document.path, data, document.body, {
         expectedEtag: document.etag
       });
+    }
+  }
+
+  private async reconcilePersonInsights(
+    records: NormalizedSourceRecord[],
+    insights: AnalysisPersonInsight[],
+    run: AnalysisRunMetadata
+  ): Promise<void> {
+    const timestamp = run.completed_at ?? nowIso();
+    const analyzedSourceIds = new Set(records.map(({ sourceId }) => sourceId));
+    const currentInsightKeys = new Set(insights.map(personInsightKey));
+    const insightsByPerson = new Map<string, AnalysisPersonInsight[]>();
+    for (const insight of insights) {
+      const values = insightsByPerson.get(insight.person_id) ?? [];
+      values.push(insight);
+      insightsByPerson.set(insight.person_id, values);
+    }
+    const existingPeople = this.index
+      .all<PersonMetadata>()
+      .filter(({ data }) => data.type === "person");
+    const personIds = new Set([
+      ...insightsByPerson.keys(),
+      ...existingPeople
+        .filter(({ data }) =>
+          data.observations.some(
+            (observation) =>
+              observation.origin === "inferred" &&
+              observation.source_refs?.length &&
+              observation.source_refs.every((sourceRef) =>
+                analyzedSourceIds.has(sourceRef)
+              )
+          )
+        )
+        .map(({ data }) => data.id)
+    ]);
+    const discovered = new Map(
+      discoverPeople(records).map((person) => [person.id, person])
+    );
+
+    for (const personId of personIds) {
+      const relativePath =
+        this.index.byId<PersonMetadata>(personId)?.path ??
+        `people/${safeSegment(personId)}.md`;
+      const exists = await this.store.exists(relativePath);
+      const existing = exists
+        ? await this.store.read<PersonMetadata>(relativePath)
+        : null;
+      const baseline = existing?.data ?? discovered.get(personId);
+      if (!baseline) continue;
+
+      let observations = [...(baseline.observations ?? [])];
+      for (const insight of insightsByPerson.get(personId) ?? []) {
+        const key = personInsightKey(insight);
+        const sourceRefs = [...new Set(insight.source_refs)];
+        const observation: PersonObservation = {
+          text: insight.text,
+          evidence: insight.evidence.map(({ quote }) => quote),
+          confidence: insight.confidence,
+          observed_at: timestamp,
+          origin: "inferred",
+          category: insight.category,
+          source_refs: sourceRefs,
+          insight_key: key,
+          stale: false
+        };
+        if (!safeObservations([observation]).length) continue;
+        const index = observations.findIndex(
+          (candidate) => candidate.insight_key === key
+        );
+        if (index >= 0) observations[index] = observation;
+        else observations.push(observation);
+      }
+      observations = observations.map((observation) => {
+        const sourceRefs = observation.source_refs ?? [];
+        const isReconciledGeneratedObservation =
+          observation.origin === "inferred" &&
+          Boolean(observation.insight_key) &&
+          sourceRefs.length > 0 &&
+          sourceRefs.every((sourceRef) => analyzedSourceIds.has(sourceRef));
+        if (
+          !isReconciledGeneratedObservation ||
+          currentInsightKeys.has(observation.insight_key!)
+        ) {
+          return observation;
+        }
+        return {
+          ...observation,
+          stale: true,
+          superseded_at: timestamp
+        };
+      });
+      const insightSourceRefs = insightsByPerson
+        .get(personId)
+        ?.flatMap(({ source_refs }) => source_refs) ?? [];
+      const data: PersonMetadata = {
+        ...baseline,
+        updated_at: timestamp,
+        source_refs: [
+          ...new Set([...baseline.source_refs, ...insightSourceRefs])
+        ],
+        observations
+      };
+      if (existing) {
+        await this.store.write(relativePath, data, existing.body, {
+          expectedEtag: existing.etag
+        });
+      } else {
+        await this.store.write(relativePath, data, "# 人物档案\n", {
+          createOnly: true
+        });
+      }
     }
   }
 }

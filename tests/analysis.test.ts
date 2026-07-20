@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AnalysisConfigService } from "../src/analysis/config";
 import { AnalysisCoordinator } from "../src/analysis/coordinator";
+import { buildAnalysisBatches } from "../src/analysis/batch";
 import {
   AnalysisProviderError,
   minimalCodexEnvironment,
@@ -22,7 +23,8 @@ import { AnalysisProviderRegistry } from "../src/analysis/providers/registry";
 import {
   analysisJsonSchema,
   ANALYSIS_SCHEMA_VERSION,
-  type AnalysisOutput
+  type AnalysisOutput,
+  type AnalysisPersonInsight
 } from "../src/analysis/schema";
 import {
   AnalysisValidationError,
@@ -30,12 +32,17 @@ import {
   parseAndValidateAnalysis
 } from "../src/analysis/validation";
 import { ContextIndex } from "../src/core/index";
-import { personIdForIdentity } from "../src/core/people";
+import { discoverPeople, personIdForIdentity } from "../src/core/people";
 import type {
   NormalizedSourceRecord,
+  PersonMetadata,
   TodoMetadata
 } from "../src/core/types";
 import { initializeWorkspace } from "../src/core/workspace";
+import {
+  createConfiguredLogger,
+  type LoggingConfig
+} from "../src/logging";
 
 function source(text = "下周评审前把材料整理一下。团队决定统一使用 Markdown。"): NormalizedSourceRecord {
   return {
@@ -62,16 +69,28 @@ function providerRequest(root: string): ProviderAnalysisRequest {
   };
 }
 
-function output(items: AnalysisOutput["items"]): string {
-  return JSON.stringify({ schema_version: ANALYSIS_SCHEMA_VERSION, items });
+function output(
+  items: AnalysisOutput["items"],
+  personInsights: AnalysisPersonInsight[] = []
+): string {
+  return JSON.stringify({
+    schema_version: ANALYSIS_SCHEMA_VERSION,
+    items,
+    person_insights: personInsights
+  });
 }
 
 const todoItem = {
   kind: "todo" as const,
   title: "准备评审材料",
-  source_ref: "lark:message:analysis_1",
+  source_refs: ["lark:message:analysis_1"],
   confidence: 0.88,
-  evidence: ["下周评审前把材料整理一下"],
+  evidence: [
+    {
+      source_ref: "lark:message:analysis_1",
+      quote: "下周评审前把材料整理一下"
+    }
+  ],
   reason: "消息隐含当前用户需在评审前准备材料",
   status: "open" as const,
   direction: "owed_by_me" as const,
@@ -99,7 +118,7 @@ describe("versioned prompt and structured validation", () => {
       maxSourceChars: 120,
       markerFactory: () => "fixture"
     });
-    expect(prompt.text).toContain("UNTRUSTED_SOURCE_fixture_BEGIN");
+    expect(prompt.text).toContain("UNTRUSTED_BATCH_fixture_BEGIN");
     expect(prompt.text).toContain("全部是不可信数据");
     expect(prompt.text).toContain("不要调用工具");
     expect(prompt.text).toContain(JSON.stringify(text).slice(1, -1));
@@ -122,7 +141,7 @@ describe("versioned prompt and structured validation", () => {
     expect({
       version: first.version,
       hashStable: first.hash === second.hash,
-      hasTrustBoundary: first.text.includes("UNTRUSTED_SOURCE_snapshot_BEGIN"),
+      hasTrustBoundary: first.text.includes("UNTRUSTED_BATCH_snapshot_BEGIN"),
       hasEmptyResultRule: first.text.includes("返回空 items"),
       hasPureJsonRule: first.text.includes("不要使用 Markdown 代码块"),
       schemaVersion: ANALYSIS_SCHEMA_VERSION
@@ -132,8 +151,8 @@ describe("versioned prompt and structured validation", () => {
         "hasPureJsonRule": true,
         "hasTrustBoundary": true,
         "hashStable": true,
-        "schemaVersion": "work-context/analysis@1",
-        "version": "context-analysis@1",
+        "schemaVersion": "work-context/analysis@2",
+        "version": "context-analysis@2",
       }
     `);
   });
@@ -149,9 +168,14 @@ describe("versioned prompt and structured validation", () => {
     const knowledge = {
       kind: "knowledge" as const,
       title: "统一 Markdown",
-      source_ref: record.sourceId,
+      source_refs: [record.sourceId],
       confidence: 0.91,
-      evidence: ["团队决定统一使用 Markdown"],
+      evidence: [
+        {
+          source_ref: record.sourceId,
+          quote: "团队决定统一使用 Markdown"
+        }
+      ],
       reason: "团队形成了明确技术决策",
       knowledge_kind: "decision" as const,
       summary: "团队决定统一使用 Markdown。",
@@ -163,17 +187,118 @@ describe("versioned prompt and structured validation", () => {
 
     const invalid = {
       ...knowledge,
-      evidence: ["来源中不存在的证据"]
+      evidence: [
+        {
+          source_ref: record.sourceId,
+          quote: "来源中不存在的证据"
+        }
+      ]
     };
     expect(() =>
       parseAndValidateAnalysis(output([todoItem, invalid]), record, prompt)
     ).toThrow(AnalysisValidationError);
   });
 
+  it("packs ordered sources to configured limits and validates multi-source person insights", () => {
+    const records = [
+      {
+        ...source("Alice 负责发布流程。"),
+        sourceId: "lark:message:batch_1",
+        occurredAt: "2026-07-20T01:00:00.000Z"
+      },
+      {
+        ...source("Alice 会在评审前汇总阻塞项。"),
+        sourceId: "lark:message:batch_2",
+        occurredAt: "2026-07-20T02:00:00.000Z"
+      },
+      {
+        ...source("第三条消息"),
+        sourceId: "lark:message:batch_3",
+        occurredAt: "2026-07-20T03:00:00.000Z"
+      }
+    ];
+    const batches = buildAnalysisBatches(records, {
+      maxRecords: 2,
+      maxSourceCharacters: 100,
+      maxBatchSourceCharacters: 100
+    });
+    expect(batches.map(({ records: values }) => values.map(({ sourceId }) => sourceId))).toEqual([
+      ["lark:message:batch_1", "lark:message:batch_2"],
+      ["lark:message:batch_3"]
+    ]);
+
+    const prompt = buildAnalysisPrompt(records.slice(0, 2), {
+      currentUserId: "self",
+      timezone: "Asia/Shanghai",
+      maxSourceChars: 100,
+      markerFactory: () => "batch"
+    });
+    const alice = personIdForIdentity("lark", "ou_alice");
+    const result = parseAndValidateAnalysis(
+      output([], [
+        {
+          person_id: alice,
+          category: "collaboration_style",
+          text: "会在关键评审前主动汇总阻塞项。",
+          source_refs: [
+            "lark:message:batch_1",
+            "lark:message:batch_2"
+          ],
+          confidence: 0.84,
+          evidence: [
+            {
+              source_ref: "lark:message:batch_1",
+              quote: "Alice 负责发布流程"
+            },
+            {
+              source_ref: "lark:message:batch_2",
+              quote: "Alice 会在评审前汇总阻塞项"
+            }
+          ],
+          reason: "两条独立消息共同支持该协作观察"
+        }
+      ]),
+      records.slice(0, 2),
+      prompt
+    );
+    expect(result.person_insights).toHaveLength(1);
+    const validInsight = result.person_insights[0];
+    expect(() =>
+      parseAndValidateAnalysis(
+        output([], [
+          {
+            ...validInsight,
+            source_refs: ["lark:message:batch_1"],
+            evidence: [validInsight.evidence[0]]
+          }
+        ]),
+        records.slice(0, 2),
+        prompt
+      )
+    ).toThrow(AnalysisValidationError);
+    expect(() =>
+      parseAndValidateAnalysis(
+        output([], [
+          {
+            ...validInsight,
+            category: "responsibility",
+            text: "Alice 的 MBTI 类型适合晋升"
+          }
+        ]),
+        records.slice(0, 2),
+        prompt
+      )
+    ).toThrow(AnalysisValidationError);
+  });
+
   it("exports a strict JSON Schema shared by both providers", () => {
     const schema = analysisJsonSchema as Record<string, unknown>;
     expect(schema.additionalProperties).toBe(false);
-    expect(schema.required).toEqual(["schema_version", "items"]);
+    expect(schema.required).toEqual([
+      "schema_version",
+      "items",
+      "person_insights"
+    ]);
     expect(JSON.stringify(schema)).toContain('"anyOf"');
     expect(JSON.stringify(schema)).not.toContain('"oneOf"');
     expect(schema.$schema).toBeUndefined();
@@ -224,7 +349,7 @@ describe("Codex SDK provider contract", () => {
 
     expect((await sdk.getAvailability()).available).toBe(true);
     const response = await sdk.analyze(
-      providerRequest(root),
+      { ...providerRequest(root), model: "test-model" },
       new AbortController().signal
     );
     expect(threadOptions).toMatchObject({
@@ -235,6 +360,7 @@ describe("Codex SDK provider contract", () => {
       webSearchMode: "disabled",
       skipGitRepoCheck: true
     });
+    expect(threadOptions.model).toBe("test-model");
     expect(clientConfig).toMatchObject({
       web_search: "disabled",
       mcp_servers: {},
@@ -272,7 +398,10 @@ describe("Codex SDK provider contract", () => {
     });
     await expect(
       toolProvider.analyze(providerRequest(root), new AbortController().signal)
-    ).rejects.toMatchObject({ code: "tool_activity" });
+    ).rejects.toMatchObject({
+      code: "tool_activity",
+      eventTypes: ["command_execution"]
+    });
 
     const authenticationProvider = new CodexSdkProvider({
       clientFactory: () => ({
@@ -313,6 +442,33 @@ describe("Codex SDK provider contract", () => {
     await expect(
       authenticationProvider.analyze(providerRequest(root), cancelled.signal)
     ).rejects.toMatchObject({ code: "cancelled" });
+  });
+
+  it("accepts non-side-effecting todo-list and error items", async () => {
+    const provider = new CodexSdkProvider({
+      clientFactory: () => ({
+        startThread: () => ({
+          run: async () => ({
+            items: [
+              { type: "todo_list" },
+              { type: "error" },
+              { type: "agent_message" }
+            ],
+            finalResponse: output([]),
+            usage: null
+          })
+        })
+      })
+    });
+    const response = await provider.analyze(
+      providerRequest(root),
+      new AbortController().signal
+    );
+    expect(response.eventTypes).toEqual([
+      "todo_list",
+      "error",
+      "agent_message"
+    ]);
   });
 });
 
@@ -377,7 +533,7 @@ describe("codex exec provider contract", () => {
       }
     });
     const response = await provider.analyze(
-      providerRequest(root),
+      { ...providerRequest(root), model: "test-model" },
       new AbortController().signal
     );
     expect(runner.input?.args).toEqual(
@@ -395,11 +551,15 @@ describe("codex exec provider contract", () => {
       ])
     );
     expect(runner.input?.stdin).toBe("只返回 JSON");
+    expect(runner.input?.args).toEqual(
+      expect.arrayContaining(["--model", "test-model"])
+    );
     expect(runner.input?.env.DATABASE_URL).toBeUndefined();
     expect(response.usage?.output_tokens).toBe(3);
     expect(JSON.parse(response.finalResponse)).toEqual({
       schema_version: ANALYSIS_SCHEMA_VERSION,
-      items: []
+      items: [],
+      person_insights: []
     });
   });
 
@@ -433,7 +593,8 @@ describe("codex exec provider contract", () => {
       "command_execution",
       "file_change",
       "mcp_tool_call",
-      "web_search"
+      "web_search",
+      "future_tool_type"
     ]) {
       const provider = new CodexExecProvider({
         runner: new FakeExecRunner([
@@ -454,7 +615,8 @@ class QueueProvider implements AnalysisProvider {
   constructor(
     readonly id: string,
     private readonly responses: string[],
-    private readonly failure: Error | null = null
+    private readonly failure: Error | null = null,
+    private readonly diagnostic?: string
   ) {}
 
   async getAvailability() {
@@ -474,7 +636,8 @@ class QueueProvider implements AnalysisProvider {
         output_tokens: 5,
         reasoning_output_tokens: 1
       },
-      eventTypes: ["agent_message"]
+      eventTypes: ["agent_message"],
+      ...(this.diagnostic ? { diagnostic: this.diagnostic } : {})
     };
   }
 }
@@ -488,6 +651,26 @@ describe("analysis coordinator integration", () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("migrates legacy analysis configuration to batch defaults", async () => {
+    const store = await initializeWorkspace(root);
+    const legacy = await store.read("config/analysis.md");
+    const data = { ...legacy.data };
+    data.prompt_version = "context-analysis@1";
+    delete data.max_batch_records;
+    delete data.max_batch_source_chars;
+    await store.write(legacy.path, data, legacy.body, {
+      expectedEtag: legacy.etag
+    });
+
+    const migratedStore = await initializeWorkspace(root);
+    const migrated = await migratedStore.read("config/analysis.md");
+    expect(migrated.data).toMatchObject({
+      prompt_version: "context-analysis@2",
+      max_batch_records: 50,
+      max_batch_source_chars: 60000
+    });
   });
 
   it("carries the normalized current-user identity into later message prompts", async () => {
@@ -527,9 +710,14 @@ describe("analysis coordinator integration", () => {
     const knowledge = {
       kind: "knowledge" as const,
       title: "统一使用 Markdown",
-      source_ref: source().sourceId,
+      source_refs: [source().sourceId],
       confidence: 0.92,
-      evidence: ["团队决定统一使用 Markdown"],
+      evidence: [
+        {
+          source_ref: source().sourceId,
+          quote: "团队决定统一使用 Markdown"
+        }
+      ],
       reason: "消息包含明确团队决策",
       knowledge_kind: "decision" as const,
       summary: "团队决定统一使用 Markdown。",
@@ -543,7 +731,12 @@ describe("analysis coordinator integration", () => {
           ...todoItem,
           title: "待确认的旧事项",
           status: "candidate",
-          evidence: ["旧事项取消"],
+          evidence: [
+            {
+              source_ref: source().sourceId,
+              quote: "旧事项取消"
+            }
+          ],
           reason: "用于验证新分析项协调"
         }
       ])
@@ -601,6 +794,166 @@ describe("analysis coordinator integration", () => {
     for (const directory of provider.capturedDirectories) {
       await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
     }
+  });
+
+  it("logs successful, skipped, diagnostic, and invalid-output analysis without source content", async () => {
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const entries: Array<Record<string, unknown>> = [];
+    const loggingConfig: LoggingConfig = {
+      level: "trace",
+      consoleEnabled: true,
+      fileEnabled: false,
+      directory: path.join(root, ".context", "logs"),
+      maxFileBytes: 10 * 1024 * 1024,
+      retentionDays: 14,
+      service: "context-space"
+    };
+    const logger = createConfiguredLogger({
+      config: loggingConfig,
+      stdout: (line) =>
+        entries.push(JSON.parse(line) as Record<string, unknown>),
+      stderr: (line) =>
+        entries.push(JSON.parse(line) as Record<string, unknown>)
+    });
+    const provider = new QueueProvider(
+      "codex-sdk",
+      [output([]), "invalid-provider-response"],
+      null,
+      "notice Bearer secret-diagnostic-token"
+    );
+    const coordinator = new AnalysisCoordinator(
+      store,
+      index,
+      new AnalysisProviderRegistry([provider]),
+      new AnalysisConfigService(store, {}),
+      logger
+    );
+    const record = source("这是绝不能进入日志的原始消息正文。");
+
+    const succeeded = await coordinator.analyze(record);
+    const skipped = await coordinator.analyze(record);
+    await expect(
+      coordinator.analyze(record, { force: true })
+    ).rejects.toBeInstanceOf(AnalysisValidationError);
+    await logger.flush();
+
+    expect(succeeded.outcome).toBe("succeeded");
+    expect(skipped.outcome).toBe("skipped");
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        event: "analysis.provider.completed",
+        run_id: succeeded.run?.id
+      })
+    );
+    const providerCompleted = entries.find(
+      ({ event }) => event === "analysis.provider.completed"
+    );
+    expect(providerCompleted?.usage).toMatchObject({
+      input_tokens: 10,
+      output_tokens: 5
+    });
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        event: "analysis.batch.skipped",
+        run_id: succeeded.run?.id
+      })
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        event: "analysis.batch.failed",
+        error_code: "invalid_output",
+        run_id: succeeded.run?.id
+      })
+    );
+    const rawLogs = JSON.stringify(entries);
+    expect(rawLogs).not.toContain(record.text);
+    expect(rawLogs).not.toContain("secret-diagnostic-token");
+    expect(rawLogs).toContain("analysis.provider.diagnostic");
+    await logger.close();
+  });
+
+  it("writes and updates evidence-backed person responsibilities and work-style observations", async () => {
+    const store = await initializeWorkspace(root);
+    const records = [
+      {
+        ...source("Alice 负责发布流程。"),
+        sourceId: "lark:message:person_1",
+        occurredAt: "2026-07-20T01:00:00.000Z"
+      },
+      {
+        ...source("Alice 会在评审前汇总阻塞项。"),
+        sourceId: "lark:message:person_2",
+        occurredAt: "2026-07-20T02:00:00.000Z"
+      }
+    ];
+    const alice = discoverPeople(records)[0];
+    alice.observations.push({
+      text: "用户手动备注",
+      evidence: ["人工输入"],
+      confidence: 1,
+      observed_at: "2026-07-20T00:00:00.000Z",
+      origin: "manual"
+    });
+    await store.write(`people/${alice.id}.md`, alice, "# Alice", {
+      createOnly: true
+    });
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const insight = {
+      person_id: alice.id,
+      category: "collaboration_style" as const,
+      text: "在关键评审前主动汇总阻塞项。",
+      source_refs: [records[0].sourceId, records[1].sourceId],
+      confidence: 0.86,
+      evidence: [
+        {
+          source_ref: records[0].sourceId,
+          quote: "Alice 负责发布流程"
+        },
+        {
+          source_ref: records[1].sourceId,
+          quote: "Alice 会在评审前汇总阻塞项"
+        }
+      ],
+      reason: "两条独立消息支持该观察"
+    };
+    const provider = new QueueProvider("codex-sdk", [
+      output([], [insight]),
+      output([], [{ ...insight, text: "会在评审节点前主动汇总阻塞项。" }])
+    ]);
+    const coordinator = new AnalysisCoordinator(
+      store,
+      index,
+      new AnalysisProviderRegistry([provider]),
+      new AnalysisConfigService(store, {})
+    );
+
+    const first = await coordinator.analyzeRecords(records);
+    expect(first.batches).toBe(1);
+    expect(provider.calls).toHaveLength(1);
+    let profile = await store.read<PersonMetadata>(`people/${alice.id}.md`);
+    expect(profile.data.observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ origin: "manual", text: "用户手动备注" }),
+        expect.objectContaining({
+          origin: "inferred",
+          category: "collaboration_style",
+          source_refs: [records[0].sourceId, records[1].sourceId],
+          stale: false
+        })
+      ])
+    );
+
+    await coordinator.analyzeRecords(records, { force: true });
+    profile = await store.read<PersonMetadata>(`people/${alice.id}.md`);
+    expect(
+      profile.data.observations.filter(({ origin }) => origin === "inferred")
+    ).toHaveLength(1);
+    expect(
+      profile.data.observations.find(({ origin }) => origin === "inferred")?.text
+    ).toBe("会在评审节点前主动汇总阻塞项。");
   });
 
   it("switches only new run snapshots and never silently falls back", async () => {
@@ -672,6 +1025,57 @@ describe("analysis coordinator integration", () => {
     } finally {
       await rm(isolatedRoot, { recursive: true, force: true });
     }
+  });
+
+  it("persists the actual forbidden tool event types in failed runs", async () => {
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const failure = new AnalysisProviderError(
+      "tool_activity",
+      "分析运行包含不允许的工具事件：command_execution",
+      false
+    );
+    failure.eventTypes = ["reasoning", "command_execution"];
+    const entries: Array<Record<string, unknown>> = [];
+    const logger = createConfiguredLogger({
+      config: {
+        level: "trace",
+        consoleEnabled: true,
+        fileEnabled: false,
+        directory: path.join(root, ".context", "logs"),
+        maxFileBytes: 10 * 1024 * 1024,
+        retentionDays: 14,
+        service: "context-space"
+      },
+      stdout: (line) =>
+        entries.push(JSON.parse(line) as Record<string, unknown>),
+      stderr: (line) =>
+        entries.push(JSON.parse(line) as Record<string, unknown>)
+    });
+    const coordinator = new AnalysisCoordinator(
+      store,
+      index,
+      new AnalysisProviderRegistry([
+        new QueueProvider("codex-sdk", [], failure)
+      ]),
+      new AnalysisConfigService(store, {}),
+      logger
+    );
+    await expect(coordinator.analyze(source())).rejects.toMatchObject({
+      code: "tool_activity"
+    });
+    const run = (await coordinator.runStore.recent(1))[0];
+    expect(run.event_types).toEqual(["reasoning", "command_execution"]);
+    expect(run.error_message).toContain("command_execution");
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        event: "analysis.batch.failed",
+        error_code: "tool_activity",
+        event_types: ["reasoning", "command_execution"]
+      })
+    );
+    await logger.close();
   });
 
   it("uses an environment allowlist without leaking unrelated secrets", () => {

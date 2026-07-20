@@ -11,7 +11,7 @@ import {
 } from "./contracts";
 
 export interface AnalysisRunIdentity {
-  sourceId: string;
+  sourceIds: string[];
   sourceHash: string;
   provider: string;
   model: string | null;
@@ -62,17 +62,22 @@ export class AnalysisRunStore {
   async start(input: StartAnalysisRunInput): Promise<AnalysisRunMetadata> {
     const timestamp = nowIso();
     const existing = await this.get(input.runId);
+    const sourceId =
+      input.sourceIds.length === 1
+        ? input.sourceIds[0]
+        : `batch:${hashStableValue(input.sourceIds).slice(0, 24)}`;
     const metadata: AnalysisRunMetadata = {
-      schema: "work-context/analysis-run@1",
+      schema: "work-context/analysis-run@2",
       id: input.runId,
       type: "analysis-run",
       title: `LLM 分析运行 ${input.runId.slice(-8)}`,
       managed: "generated",
       created_at: existing?.data.created_at ?? timestamp,
       updated_at: timestamp,
-      source_refs: [input.sourceId],
+      source_refs: [...input.sourceIds],
       status: "running",
-      source_id: input.sourceId,
+      source_id: sourceId,
+      source_ids: [...input.sourceIds],
       source_hash: input.sourceHash,
       provider: input.provider,
       model: input.model,

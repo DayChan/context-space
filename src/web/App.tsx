@@ -40,6 +40,7 @@ import type {
   LeaderConfig,
   LoopReadiness,
   Overview,
+  PersonInsightCategory,
   PersonMetadata,
   SearchResult,
   SourceMetadata,
@@ -93,6 +94,13 @@ const navigation = [
   { to: "/loop", label: "Loop", icon: Bot },
   { to: "/settings", label: "Settings", icon: Settings }
 ] as const;
+
+const observationCategoryLabels: Record<PersonInsightCategory, string> = {
+  responsibility: "职责",
+  communication_style: "沟通方式",
+  collaboration_style: "协作方式",
+  work_preference: "工作偏好"
+};
 
 function formatDate(value: string | null | undefined, withTime = true): string {
   if (!value) return "未设置";
@@ -590,6 +598,10 @@ function PeoplePage() {
       <div className="people-grid">
         {data.map((document) => {
           const person = document.data;
+          const responsibility = person.observations.find(
+            (observation) =>
+              observation.category === "responsibility" && !observation.stale
+          );
           const openLoops =
             (document.relationships?.owedByMe.length ?? 0) +
             (document.relationships?.waitingOnThem.length ?? 0) +
@@ -599,7 +611,7 @@ function PeoplePage() {
               <div className="person-avatar">{person.title.slice(0, 1).toUpperCase()}</div>
               <div className="person-card-main">
                 <div><h3>{person.title}</h3>{person.is_leader && <Badge tone="coral">Leader +{person.leader_boost}</Badge>}</div>
-                <p>{person.role ?? "角色待补充"}</p>
+                <p>{person.role ?? responsibility?.text ?? "角色待补充"}</p>
                 <div className="person-meta"><span>{openLoops} 个开放承诺</span><span>最近 {formatDate(person.last_interaction_at)}</span></div>
               </div>
               <ChevronRight size={17} />
@@ -749,14 +761,16 @@ function SettingsPage() {
         model: null,
         timeout_ms: 120000,
         max_source_chars: 20000,
+        max_batch_records: 50,
+        max_batch_source_chars: 60000,
         max_output_bytes: 2000000,
-        prompt_version: "context-analysis@1",
+        prompt_version: "context-analysis@2",
         retain_runs: 50,
         max_reanalysis_records: 50
       },
       providers: [],
-      prompt_version: "context-analysis@1",
-      schema_version: "work-context/analysis@1",
+      prompt_version: "context-analysis@2",
+      schema_version: "work-context/analysis@2",
       status: {
         schema: "work-context/analysis-status@1",
         id: "analysis_status",
@@ -779,6 +793,7 @@ function SettingsPage() {
   const people = useApi<ApiDocument<PersonMetadata>[]>("/api/documents?type=person", []);
   const [syncing, setSyncing] = useState(false);
   const [switchingProvider, setSwitchingProvider] = useState(false);
+  const [savingModel, setSavingModel] = useState(false);
   const [message, setMessage] = useState("");
 
   async function syncLark() {
@@ -829,6 +844,31 @@ function SettingsPage() {
     }
   }
 
+  async function saveModel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingModel(true);
+    setMessage("");
+    const rawModel = new FormData(event.currentTarget).get("model");
+    const model =
+      typeof rawModel === "string" ? rawModel.trim() || null : null;
+    try {
+      await api("/api/config/analysis", {
+        method: "PUT",
+        body: JSON.stringify({ model })
+      });
+      setMessage(
+        model
+          ? `后续分析将使用模型 ${model}；可用性由当前 Codex 认证决定。`
+          : "已清空模型覆盖；后续分析使用 Codex 当前默认模型。"
+      );
+      await config.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingModel(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Local control" title="Settings" description="数据源、Leader、同步和安全边界都由本地 Markdown 配置。" />
@@ -861,7 +901,7 @@ function SettingsPage() {
             <div className="setting-icon analysis-icon"><Sparkles size={19} /></div>
             <div>
               <strong>分析 Provider</strong>
-              <span>只发送当前来源的最小上下文；不会让模型执行任务或调用工具</span>
+              <span>完整拉取后按容量批量发送上下文；不会让模型执行任务或调用工具</span>
             </div>
             {config.data.analysis.provider_locked && <Badge tone="amber">环境锁定</Badge>}
           </div>
@@ -878,6 +918,26 @@ function SettingsPage() {
               ))}
             </select>
           </label>
+          <form className="model-control" onSubmit={saveModel}>
+            <label className="provider-control">
+              <span>模型（留空使用 Codex 默认）</span>
+              <input
+                key={config.data.analysis.config.model ?? "codex-default"}
+                aria-label="LLM 分析模型"
+                name="model"
+                defaultValue={config.data.analysis.config.model ?? ""}
+                maxLength={200}
+                placeholder="例如：账户当前可用的模型 ID"
+              />
+            </label>
+            <button
+              className="secondary-button"
+              disabled={savingModel}
+              type="submit"
+            >
+              {savingModel ? "保存中…" : "保存模型"}
+            </button>
+          </form>
           <div className="provider-list">
             {config.data.analysis.providers.map((provider) => (
               <div key={provider.id}>
@@ -893,6 +953,11 @@ function SettingsPage() {
             <div><span>最近状态</span><strong>{config.data.analysis.status.last_status ?? "尚未运行"}</strong></div>
             <div><span>最近 Provider</span><strong>{config.data.analysis.status.last_provider ?? "—"}</strong></div>
             <div><span>完成时间</span><strong>{formatDate(config.data.analysis.status.last_completed_at)}</strong></div>
+          </div>
+          <div className="sync-summary analysis-summary">
+            <div><span>当前模型</span><strong>{config.data.analysis.config.model ?? "Codex 默认"}</strong></div>
+            <div><span>每批记录</span><strong>{config.data.analysis.config.max_batch_records}</strong></div>
+            <div><span>每批来源字符</span><strong>{config.data.analysis.config.max_batch_source_chars}</strong></div>
           </div>
           {config.data.analysis.status.last_error_message && (
             <p className="provider-error">{config.data.analysis.status.last_error_message}</p>
@@ -1034,6 +1099,41 @@ function DocumentPage() {
           {person && document.relationships && (
             <Section title="Mutual commitments">
               <div className="meta-list"><div><span>我欠对方</span><strong>{document.relationships.owedByMe.length}</strong></div><div><span>等待对方</span><strong>{document.relationships.waitingOnThem.length}</strong></div><div><span>共同推进</span><strong>{document.relationships.shared.length}</strong></div></div>
+            </Section>
+          )}
+          {person && (
+            <Section title="职场观察" subtitle="LLM 推断 · 可由证据修正">
+              <div className="observation-list">
+                {person.observations.map((observation, index) => (
+                  <article
+                    className={`observation ${observation.stale ? "stale" : ""}`}
+                    key={observation.insight_key ?? `${observation.observed_at}-${index}`}
+                  >
+                    <div className="observation-head">
+                      <Badge tone={observation.stale ? "amber" : "purple"}>
+                        {observation.category
+                          ? observationCategoryLabels[observation.category]
+                          : "人工观察"}
+                      </Badge>
+                      <span>{Math.round(observation.confidence * 100)}% · {formatDate(observation.observed_at)}</span>
+                    </div>
+                    <strong>{observation.text}</strong>
+                    <ul>
+                      {observation.evidence.map((evidence) => (
+                        <li key={evidence}>{evidence}</li>
+                      ))}
+                    </ul>
+                    <div className="observation-sources">
+                      {(observation.source_refs ?? []).map((reference) => (
+                        <code key={reference}>{reference}</code>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+                {!person.observations.length && (
+                  <span className="muted-copy">暂无有证据支撑的职责或协作观察。</span>
+                )}
+              </div>
             </Section>
           )}
           <Section title="Provenance">
