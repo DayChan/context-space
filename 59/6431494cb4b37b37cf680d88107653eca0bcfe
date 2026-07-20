@@ -1,0 +1,25 @@
+src/web/App.tsx
+  s_9a2d24a49d1051::t_2cc40205aec7ee 722-744,749-759,761,784-800
+src/web/styles.css
+  s_9a2d24a49d1051::t_2edaa758aa16dd 201-204
+tests/frontend.test.tsx
+  s_9a2d24a49d1051::t_93e8a04b0a63fb 97-123,326-331,394-411
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "596431494cb4b37b37cf680d88107653eca0bcfe",
+  "prompts": {},
+  "sessions": {
+    "s_9a2d24a49d1051": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7eeb-f0ad-7c62-81f3-0abdc39b8d39",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
