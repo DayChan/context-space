@@ -9,7 +9,22 @@ export type DocumentType =
   | "summary"
   | "candidate"
   | "sync-status"
+  | "analysis-run"
+  | "analysis-status"
   | "loop-policy";
+
+export interface AnalysisProvenance {
+  run_id: string;
+  item_key: string;
+  provider: string;
+  prompt_version: string;
+  schema_version: string;
+  analyzed_at: string;
+  evidence: string[];
+  reason: string;
+  stale?: boolean;
+  superseded_at?: string;
+}
 
 export interface BaseMetadata {
   [key: string]: unknown;
@@ -23,6 +38,7 @@ export interface BaseMetadata {
   source_refs: string[];
   confidence?: number;
   status?: string;
+  analysis?: AnalysisProvenance;
 }
 
 export interface AutomationConfig {
@@ -154,6 +170,8 @@ export interface SyncSourceResult {
   ok: boolean;
   received: number;
   persisted: number;
+  analyzed?: number;
+  analysis_failed?: number;
   error?: string;
   completed_at?: string;
 }

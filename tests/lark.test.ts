@@ -2,6 +2,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AnalysisConfigService } from "../src/analysis/config";
+import { AnalysisCoordinator } from "../src/analysis/coordinator";
+import type {
+  AnalysisProvider,
+  ProviderAnalysisRequest,
+  ProviderAnalysisResponse
+} from "../src/analysis/contracts";
+import { AnalysisProviderRegistry } from "../src/analysis/providers/registry";
 import { LarkAdapter } from "../src/adapters/lark/adapter";
 import {
   assertReadOnlyLarkCommand,
@@ -12,6 +20,60 @@ import {
 import { LarkSyncService } from "../src/adapters/lark/sync";
 import { ContextIndex } from "../src/core/index";
 import { initializeWorkspace } from "../src/core/workspace";
+
+class FakeAnalysisProvider implements AnalysisProvider {
+  readonly id = "codex-sdk";
+
+  constructor(private readonly shouldFail = false) {}
+
+  async getAvailability() {
+    return { available: true, detail: "测试 Provider" };
+  }
+
+  async analyze(request: ProviderAnalysisRequest): Promise<ProviderAnalysisResponse> {
+    if (this.shouldFail) throw new Error("simulated model outage");
+    const sourceId = request.prompt.match(/"source_ref":"([^"]+)"/)?.[1] ?? "";
+    const evidence = request.prompt.includes("跟进设计")
+      ? "请你跟进设计"
+      : "请你准备发布计划";
+    return {
+      finalResponse: JSON.stringify({
+        schema_version: "work-context/analysis@1",
+        items: [
+          {
+            kind: "todo",
+            title: evidence,
+            source_ref: sourceId,
+            confidence: 0.9,
+            evidence: [evidence],
+            reason: "消息明确要求当前用户完成工作",
+            status: "open",
+            direction: "owed_by_me",
+            due_at: null,
+            explicit: true,
+            stakeholders: []
+          }
+        ]
+      }),
+      model: "fake",
+      usage: null,
+      eventTypes: ["agent_message"]
+    };
+  }
+}
+
+function createAnalysis(
+  store: Awaited<ReturnType<typeof initializeWorkspace>>,
+  index: ContextIndex,
+  provider: AnalysisProvider = new FakeAnalysisProvider()
+): AnalysisCoordinator {
+  return new AnalysisCoordinator(
+    store,
+    index,
+    new AnalysisProviderRegistry([provider]),
+    new AnalysisConfigService(store, {})
+  );
+}
 
 class FakeRunner implements CommandRunner {
   calls: string[][] = [];
@@ -112,7 +174,13 @@ describe("read-only Lark adapter", () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
-    const first = new LarkSyncService(store, index, new LarkAdapter(new FakeRunner()));
+    const analysis = createAnalysis(store, index);
+    const first = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(new FakeRunner()),
+      analysis
+    );
     const clock = new Date("2026-07-20T12:00:00Z");
     const firstStatus = await first.sync({
       now: clock,
@@ -134,7 +202,8 @@ describe("read-only Lark adapter", () => {
     const partial = new LarkSyncService(
       store,
       index,
-      new LarkAdapter(new FakeRunner(true))
+      new LarkAdapter(new FakeRunner(true)),
+      analysis
     );
     const partialStatus = await partial.sync({
       now: new Date("2026-07-20T12:10:00Z"),
@@ -147,5 +216,32 @@ describe("read-only Lark adapter", () => {
     expect(
       (checkpoint.data.source_checkpoints as Record<string, unknown>).tasks
     ).toBeDefined();
+  });
+
+  it("advances source checkpoints when LLM analysis fails", async () => {
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const sync = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(new FakeRunner()),
+      createAnalysis(store, index, new FakeAnalysisProvider(true))
+    );
+    const status = await sync.sync({
+      now: new Date("2026-07-20T12:00:00Z"),
+      backfillDays: 1,
+      windowDays: 1
+    });
+
+    const mentions = status.results.find((result) => result.source === "mentions");
+    expect(mentions?.ok).toBe(true);
+    expect(mentions?.persisted).toBeGreaterThan(0);
+    expect(mentions?.analysis_failed).toBeGreaterThan(0);
+    const checkpoint = await store.read(".context/sync/lark.md");
+    expect(
+      (checkpoint.data.source_checkpoints as Record<string, unknown>).mentions
+    ).toBeDefined();
+    expect(index.byId("lark:message:om_mention")).toBeDefined();
   });
 });

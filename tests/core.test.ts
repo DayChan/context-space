@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { analyzeSource } from "../src/core/analyzer";
+import { mapNativeTask } from "../src/core/analyzer";
 import { ContextIndex } from "../src/core/index";
 import {
   DocumentConflictError,
@@ -40,6 +40,8 @@ describe("Markdown workspace and domain core", () => {
     expect(second.etag).toBe(first.etag);
     expect(await store.exists("loop/policies.md")).toBe(true);
     expect(await store.exists(".context/sync/lark-status.md")).toBe(true);
+    expect(await store.exists("config/analysis.md")).toBe(true);
+    expect(await store.exists(".context/analysis/status.md")).toBe(true);
   });
 
   it("rejects path traversal and stale writes", async () => {
@@ -138,7 +140,7 @@ describe("Markdown workspace and domain core", () => {
     ).toHaveLength(1);
   });
 
-  it("extracts authoritative tasks and reviewable knowledge with provenance", () => {
+  it("maps only native tasks deterministically and leaves message semantics to LLM analysis", () => {
     const task: NormalizedSourceRecord = {
       sourceId: "lark:task:task_1",
       provider: "lark",
@@ -156,12 +158,10 @@ describe("Markdown workspace and domain core", () => {
       title: "Project room",
       text: "结论：最终方案使用 Markdown。请你整理发布说明。"
     };
-    const taskResult = analyzeSource(task);
-    const decisionResult = analyzeSource(decision);
+    const taskResult = mapNativeTask(task);
+    const decisionResult = mapNativeTask(decision);
     expect(taskResult.todo?.upstream).toBe("lark_task");
     expect(taskResult.todo?.source_refs).toEqual(["lark:task:task_1"]);
-    expect(decisionResult.todo?.status).toBe("open");
-    expect(decisionResult.knowledge?.curation_state).toBe("draft");
-    expect(decisionResult.knowledge?.source_refs).toEqual(["lark:message:om_1"]);
+    expect(decisionResult.todo).toBeUndefined();
   });
 });

@@ -25,6 +25,16 @@ const owedTodo: TodoMetadata = {
   explicit: true,
   upstream: "extracted_context",
   confidence: 0.9,
+  analysis: {
+    run_id: "analysis_run_123",
+    item_key: "item_123",
+    provider: "codex-sdk",
+    prompt_version: "context-analysis@1",
+    schema_version: "work-context/analysis@1",
+    analyzed_at: "2026-07-20T01:00:00Z",
+    evidence: ["准备发布计划"],
+    reason: "明确行动项"
+  },
   priority: {
     base: 50,
     manual: null,
@@ -67,12 +77,67 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
   } as Response);
 }
 
+let selectedProvider = "codex-sdk";
+
+function configResponse() {
+  return {
+    leaders: [],
+    lark: { status: EMPTY_SYNC_STATUS, readOnly: true, identity: "user" },
+    loop: { enabled: false, executionEndpoint: null },
+    analysis: {
+      current_provider: selectedProvider,
+      config_source: "workspace",
+      provider_locked: false,
+      config: {
+        provider: selectedProvider,
+        model: null,
+        timeout_ms: 120000,
+        max_source_chars: 20000,
+        max_output_bytes: 2000000,
+        prompt_version: "context-analysis@1",
+        retain_runs: 50,
+        max_reanalysis_records: 50
+      },
+      providers: [
+        { id: "codex-sdk", available: true, detail: "SDK 可用" },
+        { id: "codex-exec", available: true, detail: "CLI 可用" }
+      ],
+      prompt_version: "context-analysis@1",
+      schema_version: "work-context/analysis@1",
+      status: {
+        schema: "work-context/analysis-status@1",
+        id: "analysis_status",
+        type: "analysis-status",
+        title: "LLM 分析状态",
+        managed: "generated",
+        created_at: "2026-07-20T00:00:00Z",
+        updated_at: "2026-07-20T01:00:00Z",
+        source_refs: [],
+        last_run_id: "analysis_run_123",
+        last_status: "succeeded",
+        last_provider: "codex-sdk",
+        last_completed_at: "2026-07-20T01:00:00Z",
+        last_error_code: null,
+        last_error_message: null
+      },
+      recent_runs: []
+    }
+  };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
+  selectedProvider = "codex-sdk";
   vi.stubGlobal(
     "fetch",
-    vi.fn((input: RequestInfo | URL) => {
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === "/api/config/analysis") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { provider?: string };
+        if (body.provider) selectedProvider = body.provider;
+        return jsonResponse({ config: { provider: selectedProvider } });
+      }
+      if (url === "/api/config") return jsonResponse(configResponse());
       if (url.startsWith("/api/overview")) return jsonResponse(overview);
       if (url.startsWith("/api/documents?type=todo")) {
         return jsonResponse([
@@ -125,6 +190,8 @@ describe("Context Space workbench", () => {
     expect(await screen.findByText("lark:message:om_1")).toBeInTheDocument();
     expect(screen.getByText("外部执行不可用")).toBeInTheDocument();
     expect(screen.getByText("需要人工确认")).toBeInTheDocument();
+    expect(screen.getByText("codex-sdk")).toBeInTheDocument();
+    expect(screen.getByText("context-analysis@1")).toBeInTheDocument();
   });
 
   it("keeps Loop visible and explicitly inert", async () => {
@@ -133,5 +200,21 @@ describe("Context Space workbench", () => {
     expect(screen.getByText("execution_enabled: false")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /执行/ })).not.toBeInTheDocument();
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/loop", expect.anything()));
+  });
+
+  it("shows provider availability and switches future analysis runs", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+    const selector = await screen.findByLabelText("LLM 分析 Provider");
+    expect(screen.getByText("SDK 可用")).toBeInTheDocument();
+    expect(screen.getByText("CLI 可用")).toBeInTheDocument();
+    await user.selectOptions(selector, "codex-exec");
+    expect(
+      await screen.findByText("后续分析将使用 codex-exec；运行中的分析不受影响。")
+    ).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/config/analysis",
+      expect.objectContaining({ method: "PUT" })
+    );
   });
 });

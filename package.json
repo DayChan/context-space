@@ -22,6 +22,7 @@
     "check": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "dependencies": {
+    "@openai/codex-sdk": "^0.144.6",
     "express": "^5.2.1",
     "gray-matter": "^4.0.3",
     "lucide-react": "^1.25.0",

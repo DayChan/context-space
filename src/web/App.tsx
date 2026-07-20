@@ -46,6 +46,12 @@ import type {
   TodoMetadata,
   WorkspaceDocument
 } from "../core/types";
+import type {
+  AnalysisConfig,
+  AnalysisRunMetadata,
+  AnalysisStatusMetadata,
+  ProviderAvailability
+} from "../analysis/contracts";
 import { EMPTY_SYNC_STATUS } from "../core/types";
 import { api } from "./api";
 import { useApi } from "./hooks";
@@ -331,6 +337,11 @@ function TodoRow({ todo, compact = false }: { todo: TodoMetadata; compact?: bool
           <Badge tone={todo.direction === "waiting_on_them" ? "amber" : "blue"}>
             {todo.direction === "waiting_on_them" ? "等待对方" : todo.direction === "shared" ? "共同推进" : "我来处理"}
           </Badge>
+          {todo.analysis && (
+            <Badge tone={todo.analysis.stale ? "amber" : "purple"}>
+              {todo.analysis.stale ? "分析已过时" : todo.analysis.provider}
+            </Badge>
+          )}
         </div>
         <span>{todo.due_at ? `${formatDate(todo.due_at)} 到期` : statusLabel(todo.status)}</span>
       </div>
@@ -440,7 +451,12 @@ function InboxPage() {
           <Link className="document-card" key={document.data.id} to={`/documents/${encodeURIComponent(document.data.id)}`}>
             <div className="document-card-top">
               <Badge tone="amber">{document.data.status === "candidate" ? "Todo 候选" : "知识草稿"}</Badge>
-              {typeof document.data.confidence === "number" && <span>{Math.round(document.data.confidence * 100)}% confidence</span>}
+              {typeof document.data.confidence === "number" && (
+                <span>
+                  {document.data.analysis ? `${document.data.analysis.provider} · ` : ""}
+                  {Math.round(document.data.confidence * 100)}% confidence
+                </span>
+              )}
             </div>
             <h3>{document.data.title}</h3>
             <p>{document.body || "等待人工检查来源和上下文。"}</p>
@@ -531,7 +547,14 @@ function KnowledgePage() {
             {documents.map((document) => (
               <Link className="knowledge-row" key={document.data.id} to={`/documents/${encodeURIComponent(document.data.id)}`}>
                 <span className="knowledge-symbol">{kind.slice(0, 1).toUpperCase()}</span>
-                <div><strong>{document.data.title}</strong><small>{document.data.source_refs.length} 个来源 · {formatDate(document.data.updated_at)}</small></div>
+                <div>
+                  <strong>{document.data.title}</strong>
+                  <small>
+                    {document.data.source_refs.length} 个来源
+                    {document.data.analysis ? ` · ${document.data.analysis.provider}` : ""}
+                    {" · "}{formatDate(document.data.updated_at)}
+                  </small>
+                </div>
                 <ChevronRight size={16} />
               </Link>
             ))}
@@ -615,16 +638,63 @@ interface ConfigResponse {
   leaders: LeaderConfig[];
   lark: { status: SyncStatus; readOnly: boolean; identity: string };
   loop: { enabled: boolean; executionEndpoint: null };
+  analysis: {
+    current_provider: string;
+    config_source: "workspace" | "environment";
+    provider_locked: boolean;
+    config: AnalysisConfig;
+    providers: Array<{ id: string } & ProviderAvailability>;
+    prompt_version: string;
+    schema_version: string;
+    status: AnalysisStatusMetadata;
+    recent_runs: AnalysisRunMetadata[];
+  };
 }
 
 function SettingsPage() {
   const config = useApi<ConfigResponse>("/api/config", {
     leaders: [],
     lark: { status: EMPTY_SYNC_STATUS, readOnly: true, identity: "user" },
-    loop: { enabled: false, executionEndpoint: null }
+    loop: { enabled: false, executionEndpoint: null },
+    analysis: {
+      current_provider: "codex-sdk",
+      config_source: "workspace",
+      provider_locked: false,
+      config: {
+        provider: "codex-sdk",
+        model: null,
+        timeout_ms: 120000,
+        max_source_chars: 20000,
+        max_output_bytes: 2000000,
+        prompt_version: "context-analysis@1",
+        retain_runs: 50,
+        max_reanalysis_records: 50
+      },
+      providers: [],
+      prompt_version: "context-analysis@1",
+      schema_version: "work-context/analysis@1",
+      status: {
+        schema: "work-context/analysis-status@1",
+        id: "analysis_status",
+        type: "analysis-status",
+        title: "LLM 分析状态",
+        managed: "generated",
+        created_at: "",
+        updated_at: "",
+        source_refs: [],
+        last_run_id: null,
+        last_status: null,
+        last_provider: null,
+        last_completed_at: null,
+        last_error_code: null,
+        last_error_message: null
+      },
+      recent_runs: []
+    }
   });
   const people = useApi<ApiDocument<PersonMetadata>[]>("/api/documents?type=person", []);
   const [syncing, setSyncing] = useState(false);
+  const [switchingProvider, setSwitchingProvider] = useState(false);
   const [message, setMessage] = useState("");
 
   async function syncLark() {
@@ -651,6 +721,23 @@ function SettingsPage() {
     await Promise.all([config.reload(), people.reload()]);
   }
 
+  async function switchProvider(provider: string) {
+    setSwitchingProvider(true);
+    setMessage("");
+    try {
+      await api("/api/config/analysis", {
+        method: "PUT",
+        body: JSON.stringify({ provider })
+      });
+      setMessage(`后续分析将使用 ${provider}；运行中的分析不受影响。`);
+      await config.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSwitchingProvider(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Local control" title="Settings" description="数据源、Leader、同步和安全边界都由本地 Markdown 配置。" />
@@ -666,11 +753,61 @@ function SettingsPage() {
           <div className="sync-summary">
             <div><span>最后完成</span><strong>{formatDate(config.data.lark.status.completed_at)}</strong></div>
             <div><span>来源结果</span><strong>{config.data.lark.status.results.filter((result) => result.ok).length}/{config.data.lark.status.results.length || 5}</strong></div>
+            <div>
+              <span>分析失败</span>
+              <strong>{config.data.lark.status.results.reduce((sum, result) => sum + (result.analysis_failed ?? 0), 0)}</strong>
+            </div>
           </div>
           <button className="primary-button full-button" disabled={syncing} onClick={syncLark}>
             <RefreshCw className={syncing ? "spin" : ""} size={17} />
             {syncing ? "正在同步…" : "立即只读同步"}
           </button>
+        </Section>
+
+        <Section title="LLM 内容分析" subtitle={`${config.data.analysis.prompt_version} · ${config.data.analysis.schema_version}`}>
+          <div className="setting-row">
+            <div className="setting-icon analysis-icon"><Sparkles size={19} /></div>
+            <div>
+              <strong>分析 Provider</strong>
+              <span>只发送当前来源的最小上下文；不会让模型执行任务或调用工具</span>
+            </div>
+            {config.data.analysis.provider_locked && <Badge tone="amber">环境锁定</Badge>}
+          </div>
+          <label className="provider-control">
+            <span>调用方式</span>
+            <select
+              aria-label="LLM 分析 Provider"
+              value={config.data.analysis.current_provider}
+              disabled={config.data.analysis.provider_locked || switchingProvider}
+              onChange={(event) => void switchProvider(event.target.value)}
+            >
+              {config.data.analysis.providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>{provider.id}</option>
+              ))}
+            </select>
+          </label>
+          <div className="provider-list">
+            {config.data.analysis.providers.map((provider) => (
+              <div key={provider.id}>
+                <span className={`provider-dot ${provider.available ? "available" : ""}`} />
+                <span><strong>{provider.id}</strong><small>{provider.detail}</small></span>
+                <Badge tone={provider.available ? "mint" : "amber"}>
+                  {provider.available ? "可用" : "不可用"}
+                </Badge>
+              </div>
+            ))}
+          </div>
+          <div className="sync-summary analysis-summary">
+            <div><span>最近状态</span><strong>{config.data.analysis.status.last_status ?? "尚未运行"}</strong></div>
+            <div><span>最近 Provider</span><strong>{config.data.analysis.status.last_provider ?? "—"}</strong></div>
+            <div><span>完成时间</span><strong>{formatDate(config.data.analysis.status.last_completed_at)}</strong></div>
+          </div>
+          {config.data.analysis.status.last_error_message && (
+            <p className="provider-error">{config.data.analysis.status.last_error_message}</p>
+          )}
+          <p className="muted-copy">
+            SDK 方式可能使用 Codex 标准本地会话存储；codex-exec 使用 ephemeral 模式。两种方式均使用只读隔离目录，失败时不会静默切换。
+          </p>
         </Section>
 
         <Section title="Loop safety" subtitle="未来能力的硬边界">
@@ -813,6 +950,14 @@ function DocumentPage() {
               {!document.data.source_refs.length && <span className="muted-copy">Manual or baseline document</span>}
             </div>
             {typeof document.data.confidence === "number" && <div className="confidence"><span>Confidence</span><strong>{Math.round(document.data.confidence * 100)}%</strong></div>}
+            {document.data.analysis && (
+              <div className="meta-list">
+                <div><span>Provider</span><strong>{document.data.analysis.provider}</strong></div>
+                <div><span>Prompt</span><strong>{document.data.analysis.prompt_version}</strong></div>
+                <div><span>分析时间</span><strong>{formatDate(document.data.analysis.analyzed_at)}</strong></div>
+                <div><span>状态</span><strong>{document.data.analysis.stale ? "结果已过时" : "当前结果"}</strong></div>
+              </div>
+            )}
           </Section>
         </div>
       </div>

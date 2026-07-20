@@ -1,4 +1,4 @@
-import { analyzeSource } from "../../core/analyzer";
+import { AnalysisCoordinator } from "../../analysis/coordinator";
 import { ContextIndex } from "../../core/index";
 import type { BaseMetadata } from "../../core/types";
 import {
@@ -8,7 +8,6 @@ import {
   type SourceMetadata,
   type SyncSourceResult,
   type SyncStatus,
-  type TodoMetadata,
   type WorkspaceDocument,
   nowIso
 } from "../../core/types";
@@ -88,7 +87,8 @@ export class LarkSyncService {
   constructor(
     private readonly store: MarkdownStore,
     private readonly index: ContextIndex,
-    private readonly adapter: LarkAdapter
+    private readonly adapter: LarkAdapter,
+    private readonly analysis: AnalysisCoordinator
   ) {}
 
   getStatus(): SyncStatus {
@@ -164,7 +164,11 @@ export class LarkSyncService {
           break;
         }
         for (const record of fetched.records) {
-          sourceResult.persisted += await this.persistRecord(record);
+          const persisted = await this.persistRecord(record);
+          sourceResult.persisted += persisted.created;
+          sourceResult.analyzed = (sourceResult.analyzed ?? 0) + persisted.analyzed;
+          sourceResult.analysis_failed =
+            (sourceResult.analysis_failed ?? 0) + persisted.analysisFailed;
         }
       }
 
@@ -214,7 +218,11 @@ export class LarkSyncService {
     );
   }
 
-  private async persistRecord(record: NormalizedSourceRecord): Promise<number> {
+  private async persistRecord(record: NormalizedSourceRecord): Promise<{
+    created: number;
+    analyzed: number;
+    analysisFailed: number;
+  }> {
     const relativePath = sourcePath(record);
     const exists = await this.store.exists(relativePath);
     if (exists) {
@@ -235,8 +243,20 @@ export class LarkSyncService {
     }
 
     await this.persistPeople(record);
-    await this.persistAnalysis(record);
-    return exists ? 0 : 1;
+    try {
+      const result = await this.analysis.analyze(record);
+      return {
+        created: exists ? 0 : 1,
+        analyzed: result.outcome === "not_applicable" ? 0 : 1,
+        analysisFailed: 0
+      };
+    } catch {
+      return {
+        created: exists ? 0 : 1,
+        analyzed: 0,
+        analysisFailed: 1
+      };
+    }
   }
 
   private async persistPeople(record: NormalizedSourceRecord): Promise<void> {
@@ -279,39 +299,4 @@ export class LarkSyncService {
     }
   }
 
-  private async persistAnalysis(record: NormalizedSourceRecord): Promise<void> {
-    const analysis = analyzeSource(record);
-    if (analysis.todo) {
-      const todo = analysis.todo;
-      const directory = todo.status === "candidate" ? "inbox/todo-candidates" : "todos/items";
-      const relativePath = `${directory}/${safeSegment(todo.id)}.md`;
-      if (await this.store.exists(relativePath)) {
-        const existing = await this.store.read<TodoMetadata>(relativePath);
-        await this.store.write(
-          relativePath,
-          {
-            ...todo,
-            ...existing.data,
-            source_refs: [...new Set([...existing.data.source_refs, ...todo.source_refs])],
-            updated_at: nowIso()
-          },
-          existing.body || `# ${existing.data.title}`,
-          { expectedEtag: existing.etag }
-        );
-      } else {
-        await this.store.write(relativePath, todo, `# ${todo.title}\n\nDerived from captured Lark context.`);
-      }
-    }
-    if (analysis.knowledge) {
-      const knowledge = analysis.knowledge;
-      const relativePath = `inbox/knowledge-candidates/${safeSegment(knowledge.id)}.md`;
-      if (!(await this.store.exists(relativePath))) {
-        await this.store.write(
-          relativePath,
-          knowledge,
-          `# ${knowledge.title}\n\nReview this evidence-backed decision candidate.`
-        );
-      }
-    }
-  }
 }

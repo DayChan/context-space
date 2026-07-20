@@ -2,6 +2,14 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
+import { AnalysisConfigService } from "../analysis/config";
+import { AnalysisCoordinator } from "../analysis/coordinator";
+import type { AnalysisProvider } from "../analysis/contracts";
+import { CodexExecProvider } from "../analysis/providers/codex-exec";
+import { CodexSdkProvider } from "../analysis/providers/codex-sdk";
+import { AnalysisProviderRegistry } from "../analysis/providers/registry";
+import { ANALYSIS_PROMPT_VERSION } from "../analysis/prompt";
+import { ANALYSIS_SCHEMA_VERSION } from "../analysis/schema";
 import { LarkAdapter } from "../adapters/lark/adapter";
 import { LarkCliCommandRunner, type CommandRunner } from "../adapters/lark/runner";
 import { LarkSyncService } from "../adapters/lark/sync";
@@ -41,16 +49,37 @@ const updateSchema = z.object({
   body: z.string()
 });
 
+const reanalysisRangeSchema = z
+  .object({
+    from: z.string().datetime({ offset: true }),
+    to: z.string().datetime({ offset: true }),
+    limit: z.number().int().positive().optional()
+  })
+  .strict()
+  .refine((value) => Date.parse(value.from) <= Date.parse(value.to), {
+    message: "重分析开始时间不能晚于结束时间"
+  });
+
+const reanalysisSchema = z.union([
+  z.object({ source_id: z.string().min(1) }).strict(),
+  reanalysisRangeSchema
+]);
+
 export interface Runtime {
   store: MarkdownStore;
   index: ContextIndex;
   sync: LarkSyncService;
+  analysis: AnalysisCoordinator;
+  analysisConfig: AnalysisConfigService;
+  analysisProviders: AnalysisProviderRegistry;
   getLeaders(): Promise<LeaderConfig[]>;
 }
 
 export interface CreateAppOptions {
   workspaceRoot: string;
   commandRunner?: CommandRunner;
+  analysisProviders?: AnalysisProvider[];
+  environment?: NodeJS.ProcessEnv;
   staticRoot?: string;
 }
 
@@ -99,14 +128,26 @@ export async function createApp(options: CreateAppOptions): Promise<{
   const store = await initializeWorkspace(options.workspaceRoot);
   const index = new ContextIndex();
   await index.rebuild(store);
+  const environment = options.environment ?? process.env;
+  const analysisConfig = new AnalysisConfigService(store, environment);
+  const analysisProviders = new AnalysisProviderRegistry(
+    options.analysisProviders ?? [
+      new CodexSdkProvider({ environment }),
+      new CodexExecProvider({ environment })
+    ]
+  );
+  const analysis = new AnalysisCoordinator(store, index, analysisProviders, analysisConfig);
   const runner = options.commandRunner ?? new LarkCliCommandRunner();
-  const sync = new LarkSyncService(store, index, new LarkAdapter(runner));
+  const sync = new LarkSyncService(store, index, new LarkAdapter(runner), analysis);
   await sync.loadStatus();
 
   const runtime: Runtime = {
     store,
     index,
     sync,
+    analysis,
+    analysisConfig,
+    analysisProviders,
     async getLeaders() {
       const document = await store.read("config/priority-people.md");
       const parsed = leadersSchema.safeParse(document.data.leaders);
@@ -202,6 +243,23 @@ export async function createApp(options: CreateAppOptions): Promise<{
   });
 
   app.get("/api/config", async (_request, response) => {
+    const effectiveAnalysis = await analysisConfig.getEffective();
+    const registeredProviders = await Promise.all(
+      analysisProviders.all().map(async (provider) => ({
+        id: provider.id,
+        ...(await provider.getAvailability())
+      }))
+    );
+    const providers = analysisProviders.has(effectiveAnalysis.config.provider)
+      ? registeredProviders
+      : [
+          ...registeredProviders,
+          {
+            id: effectiveAnalysis.config.provider,
+            available: false,
+            detail: "当前配置的 Provider 未注册"
+          }
+        ];
     response.json({
       leaders: await runtime.getLeaders(),
       lark: {
@@ -212,6 +270,17 @@ export async function createApp(options: CreateAppOptions): Promise<{
       loop: {
         enabled: false,
         executionEndpoint: null
+      },
+      analysis: {
+        current_provider: effectiveAnalysis.config.provider,
+        config_source: effectiveAnalysis.source,
+        provider_locked: effectiveAnalysis.provider_locked,
+        config: effectiveAnalysis.config,
+        providers,
+        prompt_version: ANALYSIS_PROMPT_VERSION,
+        schema_version: ANALYSIS_SCHEMA_VERSION,
+        status: await analysis.runStore.status(),
+        recent_runs: await analysis.runStore.recent(5)
       }
     });
   });
@@ -241,6 +310,46 @@ export async function createApp(options: CreateAppOptions): Promise<{
     }
     await index.rebuild(store);
     response.json({ leaders });
+  });
+
+  app.put("/api/config/analysis", async (request, response) => {
+    const provider =
+      request.body && typeof request.body === "object"
+        ? (request.body as Record<string, unknown>).provider
+        : undefined;
+    if (typeof provider === "string" && !analysisProviders.has(provider)) {
+      response.status(400).json({ error: `未注册的分析 Provider：${provider}` });
+      return;
+    }
+    const current = await analysisConfig.getEffective();
+    if (
+      current.provider_locked &&
+      typeof provider === "string" &&
+      provider !== current.config.provider
+    ) {
+      response.status(409).json({ error: "分析 Provider 已被环境变量锁定" });
+      return;
+    }
+    const effective = await analysisConfig.update(request.body);
+    await index.rebuild(store);
+    response.json(effective);
+  });
+
+  app.get("/api/analysis/status", async (_request, response) => {
+    response.json({
+      status: await analysis.runStore.status(),
+      recent_runs: await analysis.runStore.recent(20)
+    });
+  });
+
+  app.post("/api/analysis/reanalyze", async (request, response) => {
+    const input = reanalysisSchema.parse(request.body);
+    const result =
+      "source_id" in input
+        ? await analysis.reanalyzeSource(input.source_id)
+        : await analysis.reanalyzeRange(input.from, input.to, input.limit);
+    await index.rebuild(store);
+    response.json(result);
   });
 
   app.post("/api/index/rebuild", async (_request, response) => {

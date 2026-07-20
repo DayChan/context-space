@@ -26,7 +26,8 @@ const REQUIRED_DIRECTORIES = [
   "summaries/weekly",
   "loop/runs",
   ".context/sync",
-  ".context/index"
+  ".context/index",
+  ".context/analysis/runs"
 ] as const;
 
 function baseline(
@@ -57,10 +58,23 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
       locale: "zh-CN",
       timezone: "Asia/Shanghai",
       initial_backfill_days: 30,
-      overlap_minutes: 10,
-      action_confidence_threshold: 0.85
+      overlap_minutes: 10
     }),
     body: "# Workspace\n\nLocal-first configuration for Context Space."
+  },
+  {
+    path: "config/analysis.md",
+    data: baseline("config_analysis", "config", "LLM 内容分析", "manual", {
+      provider: "codex-sdk",
+      model: null,
+      timeout_ms: 120000,
+      max_source_chars: 20000,
+      max_output_bytes: 2000000,
+      prompt_version: "context-analysis@1",
+      retain_runs: 50,
+      max_reanalysis_records: 50
+    }),
+    body: "# LLM 内容分析\n\nProvider 可在 Settings 中显式切换；凭证不得写入本文件。"
   },
   {
     path: "config/sources/lark.md",
@@ -79,7 +93,6 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
   {
     path: "config/policies.md",
     data: baseline("config_policies", "config", "Privacy policies", "manual", {
-      remote_model_enabled: false,
       group_context_minutes: 30,
       download_attachments: false
     }),
@@ -103,6 +116,24 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
       allowed_capabilities: []
     }),
     body: "# Loop policies\n\nReserved for future reviewed and auditable automation."
+  },
+  {
+    path: ".context/analysis/status.md",
+    data: baseline(
+      "analysis_status",
+      "analysis-status",
+      "LLM 分析状态",
+      "generated",
+      {
+        last_run_id: null,
+        last_status: null,
+        last_provider: null,
+        last_completed_at: null,
+        last_error_code: null,
+        last_error_message: null
+      }
+    ),
+    body: ""
   },
   {
     path: ".context/sync/lark.md",
