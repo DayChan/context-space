@@ -1,39 +1,39 @@
 ## Why
 
-Work context is fragmented across Lark mentions, direct messages, calendar events, and tasks, which makes commitments, current priorities, people knowledge, and durable work knowledge difficult to maintain. A local-first, Markdown-based context space is needed now to turn those sources into a traceable personal work wiki while establishing safe boundaries for future automated execution.
+工作上下文分散在飞书提及、私聊、日历日程和任务中，导致承诺事项、当前优先级、人物信息以及可长期复用的工作知识难以维护。现在需要一个基于 Markdown、本地优先的上下文空间，把这些来源转化为可追溯的个人工作知识库，同时为未来的自动化执行建立安全边界。
 
 ## What Changes
 
-- Introduce a local-first workspace where Markdown files are the canonical source of truth and any search index is rebuildable.
-- Add a read-only Lark adapter that incrementally captures group mentions, direct messages, calendar events, tasks, and discovered people through `lark-cli --as user`.
-- Normalize captured context into source documents with stable IDs, provenance, sync checkpoints, deduplication, and bounded context expansion.
-- Extract and manage Todo items, including candidate review, commitment direction, explainable priority scoring, and configurable Leader boosts.
-- Build evidence-backed people profiles and computed views of what the user owes each person and what is waiting on them.
-- Extract work knowledge into project, decision, playbook, concept, glossary, and draft documents with source references.
-- Provide a local Web UI for Now, Inbox, Todos, People, Knowledge, Timeline, Loop, and Settings.
-- Reserve Loop as a visible but disabled V1 surface and data contract; V1 will not execute external actions.
-- Add automated tests for storage, synchronization, domain logic, APIs, and frontend behavior.
+- 引入本地优先的工作区，以 Markdown 文件作为唯一可信数据源，所有搜索索引都可重新构建。
+- 新增只读飞书适配器，通过 `lark-cli --as user` 增量采集群聊提及、私聊、日历日程、任务以及发现的人物。
+- 将采集到的上下文标准化为来源文档，包含稳定 ID、来源追踪、同步检查点、去重和有边界的上下文扩展。
+- 提取并管理 Todo，包括候选项审核、承诺方向、可解释的优先级评分以及可配置的 Leader 加权。
+- 构建有证据支撑的人物档案，并计算“用户欠每个人什么”以及“正在等待对方什么”的视图。
+- 将工作知识提取为项目、决策、操作手册、概念、术语表和草稿文档，并保留来源引用。
+- 提供本地 Web 界面，包含 Now、Inbox、Todos、People、Knowledge、Timeline、Loop 和 Settings。
+- 将 Loop 作为 V1 中可见但禁用的界面与数据契约；V1 不执行任何外部动作。
+- 为存储、同步、领域逻辑、API 和前端行为添加自动化测试。
 
-## Capabilities
+## 能力
 
-### New Capabilities
+### 新增能力
 
-- `markdown-context-store`: Versioned Markdown schemas, canonical workspace layout, safe writes, source references, rebuildable indexes, and generated/manual/hybrid ownership rules.
-- `lark-context-sync`: Read-only Lark identity, message, calendar, task, and contact synchronization with checkpoints, overlap windows, pagination, deduplication, and error reporting.
-- `todo-management`: Todo extraction, candidate review, lifecycle, commitment direction, priority scoring, Leader boosts, and automation eligibility metadata.
-- `people-profiles`: Stable cross-source identities, evidence-backed role and collaboration observations, Leader configuration, and computed mutual-commitment views.
-- `knowledge-wiki`: Provenance-backed work knowledge, drafts, typed knowledge pages, summaries, search, references, and supersession state.
-- `context-workbench-ui`: Local Web UI and API for Now, Inbox, Todos, People, Knowledge, Timeline, Settings, editing, filtering, and sync visibility.
-- `automation-loop-readiness`: Disabled V1 Loop navigation, readiness views, Todo automation contract, policy placeholders, and safeguards preventing external execution.
+- `markdown-context-store`：版本化 Markdown 模式、规范工作区布局、安全写入、来源引用、可重建索引，以及生成内容/手动内容/混合内容的所有权规则。
+- `lark-context-sync`：只读同步飞书身份、消息、日历、任务和联系人，并支持检查点、重叠窗口、分页、去重及错误报告。
+- `todo-management`：Todo 提取、候选项审核、生命周期、承诺方向、优先级评分、Leader 加权和自动化资格元数据。
+- `people-profiles`：稳定的跨来源身份、有证据支撑的角色与协作观察、Leader 配置，以及计算得到的双向承诺视图。
+- `knowledge-wiki`：有来源依据的工作知识、草稿、分类知识页面、摘要、搜索、引用和替代状态。
+- `context-workbench-ui`：用于 Now、Inbox、Todos、People、Knowledge、Timeline 和 Settings 的本地 Web 界面与 API，并支持编辑、筛选和同步状态展示。
+- `automation-loop-readiness`：禁用状态的 V1 Loop 导航、就绪度视图、Todo 自动化契约、策略占位符，以及阻止外部执行的安全保护。
 
-### Modified Capabilities
+### 修改能力
 
-None.
+无。
 
-## Impact
+## 影响
 
-- Adds a TypeScript workspace containing a reusable domain/core package, a Node.js local server and Lark CLI adapter, and a React frontend.
-- Adds filesystem content under a configurable workspace root and a generated local search/index cache.
-- Depends on the installed `lark-cli` for Lark access and user authentication.
-- Introduces local HTTP APIs for browsing, editing, synchronizing, and searching context documents.
-- Handles potentially sensitive work data, requiring localhost-only defaults, minimal collection, provenance, and credential exclusion.
+- 新增 TypeScript 工作区，其中包含可复用的领域/核心模块、Node.js 本地服务与飞书 CLI 适配器，以及 React 前端。
+- 在可配置的工作区根目录下新增文件系统内容，并生成本地搜索/索引缓存。
+- 依赖已安装的 `lark-cli` 来访问飞书并完成用户认证。
+- 引入本地 HTTP API，用于浏览、编辑、同步和搜索上下文文档。
+- 系统会处理可能敏感的工作数据，因此默认仅允许本机访问、最小化采集范围、保留来源追踪并排除凭证。

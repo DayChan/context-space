@@ -1,36 +1,36 @@
 ## ADDED Requirements
 
-### Requirement: Typed knowledge documents
-The system SHALL support project, decision, playbook, concept, glossary, and draft knowledge documents with stable IDs and source references.
+### Requirement: 分类知识文档
+系统 SHALL 支持项目、决策、操作手册、概念、术语表和草稿类知识文档，并为其提供稳定 ID 和来源引用。
 
-#### Scenario: Capture a decision candidate
-- **WHEN** analysis identifies a possible decision in source context
-- **THEN** it creates a draft knowledge document with decision metadata and evidence links
+#### Scenario: 捕获决策候选
+- **WHEN** 分析在来源上下文中识别到可能的决策
+- **THEN** 系统创建包含决策元数据和证据链接的知识草稿
 
-### Requirement: Provenance and confidence
-Generated knowledge MUST expose its source references, confidence, generated time, and curation state.
+### Requirement: 来源依据与置信度
+生成的知识 MUST 展示来源引用、置信度、生成时间和整理状态。
 
-#### Scenario: View generated knowledge
-- **WHEN** the user opens a generated knowledge page
-- **THEN** the page displays its evidence and indicates whether it is draft or curated
+#### Scenario: 查看生成的知识
+- **WHEN** 用户打开生成的知识页面
+- **THEN** 页面展示其证据，并说明内容处于草稿还是已整理状态
 
-### Requirement: Supersession history
-The system SHALL preserve obsolete knowledge and represent replacement using explicit stale or superseded state and links.
+### Requirement: 替代历史
+系统 SHALL 保留已过时的知识，并通过明确的过时或已替代状态及链接来表示替代关系。
 
-#### Scenario: Replace an earlier decision
-- **WHEN** a curated decision supersedes an existing decision
-- **THEN** the earlier document remains readable and links to the replacing document
+#### Scenario: 替代较早的决策
+- **WHEN** 一项已整理决策替代现有决策
+- **THEN** 较早的文档仍然可读，并链接到替代它的文档
 
-### Requirement: Work summaries
-The system SHALL generate a Now summary and support dated daily and weekly summaries from current canonical Todo, calendar, mention, waiting, and knowledge data.
+### Requirement: 工作摘要
+系统 SHALL 生成 Now 摘要，并支持根据当前规范 Todo、日历、提及、等待事项和知识数据生成带日期的日报与周报。
 
-#### Scenario: Build the Now summary
-- **WHEN** the workspace index is rebuilt
-- **THEN** the Now summary reflects current top Todo items, upcoming calendar items, recent mentions, waiting items, review candidates, and knowledge changes
+#### Scenario: 构建 Now 摘要
+- **WHEN** 工作区索引完成重建
+- **THEN** Now 摘要反映当前重要 Todo、近期日历事项、最近提及、等待事项、待审核候选和知识变更
 
-### Requirement: Knowledge search and backlinks
-The system SHALL make knowledge content searchable and expose incoming references from Todo, people, source, and other knowledge documents.
+### Requirement: 知识搜索与反向链接
+系统 SHALL 使知识内容可搜索，并展示来自 Todo、人物、来源和其他知识文档的传入引用。
 
-#### Scenario: Search for a project term
-- **WHEN** the user searches for a term contained in a project page
-- **THEN** the matching knowledge document is returned with type and relevant metadata
+#### Scenario: 搜索项目术语
+- **WHEN** 用户搜索项目页面中包含的术语
+- **THEN** 系统返回匹配的知识文档及其类型和相关元数据

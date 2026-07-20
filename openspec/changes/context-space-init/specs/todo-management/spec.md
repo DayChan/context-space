@@ -1,44 +1,44 @@
 ## ADDED Requirements
 
-### Requirement: Todo source handling
-The system SHALL create authoritative Todo items from native Lark tasks and reviewable candidates from non-native context unless an explicit action meets the configured confidence threshold.
+### Requirement: Todo 来源处理
+系统 SHALL 根据飞书原生任务创建权威 Todo，并根据非原生上下文创建可审核候选；如果明确行动项达到已配置的置信度阈值，则可直接创建 Todo。
 
-#### Scenario: Import a native task
-- **WHEN** a new incomplete Lark task is synchronized
-- **THEN** an open Todo with a stable source reference and upstream status ownership is created or updated
+#### Scenario: 导入原生任务
+- **WHEN** 同步到一条新的未完成飞书任务
+- **THEN** 系统创建或更新一条开放 Todo，并为其保留稳定的来源引用和上游状态所有权
 
-#### Scenario: Detect an ambiguous chat action
-- **WHEN** a message suggests work but does not meet the explicit-action threshold
-- **THEN** a candidate is placed in Inbox and does not appear as a confirmed high-priority Todo
+#### Scenario: 检测含糊的聊天行动项
+- **WHEN** 消息暗示存在工作，但未达到明确行动项阈值
+- **THEN** 系统将候选项放入 Inbox，且不会把它显示为已确认的高优先级 Todo
 
-### Requirement: Lifecycle and commitment direction
-Each Todo MUST record a supported lifecycle status and whether it is owed by the user, waiting on another person, or shared.
+### Requirement: 生命周期与承诺方向
+每个 Todo MUST 记录受支持的生命周期状态，并说明该事项由用户负责、正在等待他人，还是共同负责。
 
-#### Scenario: Track work waiting on another person
-- **WHEN** a confirmed Todo has direction `waiting_on_them`
-- **THEN** it appears in waiting views and is excluded from the user's direct execution queue
+#### Scenario: 跟踪等待他人的工作
+- **WHEN** 一条已确认 Todo 的方向为 `waiting_on_them`
+- **THEN** 该 Todo 出现在等待视图中，并从用户的直接执行队列中排除
 
-### Requirement: Explainable priority
-The system SHALL compute priority from a base score and named boosts for urgency, explicit assignment, staleness, and Leader involvement, with a user-set manual priority taking precedence.
+### Requirement: 可解释优先级
+系统 SHALL 根据基础分以及紧迫度、明确指派、停滞和 Leader 参与等具名加权计算优先级，并优先采用用户设置的手动优先级。
 
-#### Scenario: Apply a Leader boost
-- **WHEN** an open `owed_by_me` Todo references a manually configured Leader
-- **THEN** its effective priority increases and the result includes a visible Leader reason
+#### Scenario: 应用 Leader 加权
+- **WHEN** 一条开放的 `owed_by_me` Todo 引用了手动配置的 Leader
+- **THEN** 该 Todo 的最终优先级提高，且结果中包含可见的 Leader 原因
 
-#### Scenario: Preserve manual priority
-- **WHEN** a Todo has a manual priority override
-- **THEN** sorting uses the manual value while retaining automatic reasons for explanation
+#### Scenario: 保留手动优先级
+- **WHEN** Todo 设置了手动优先级覆盖值
+- **THEN** 排序使用手动值，同时保留自动计算原因用于解释
 
-### Requirement: Todo provenance
-Every non-manual Todo SHALL retain at least one resolvable source reference and expose it in the API and UI.
+### Requirement: Todo 来源依据
+每条非手动 Todo SHALL 至少保留一个可解析的来源引用，并在 API 和 UI 中展示该引用。
 
-#### Scenario: Open Todo evidence
-- **WHEN** the user views a Todo derived from a Lark mention
-- **THEN** the Todo displays a reference to the captured mention document
+#### Scenario: 打开 Todo 证据
+- **WHEN** 用户查看由飞书提及派生的 Todo
+- **THEN** Todo 展示指向已采集提及文档的引用
 
-### Requirement: Automation metadata
-Every Todo SHALL expose an automation block whose default mode is disabled.
+### Requirement: 自动化元数据
+每条 Todo SHALL 提供自动化配置块，其默认模式为禁用。
 
-#### Scenario: Create a new Todo
-- **WHEN** a Todo is created without explicit automation settings
-- **THEN** its mode is `disabled`, confirmation is required, and no capabilities are allowed
+#### Scenario: 创建新 Todo
+- **WHEN** 创建 Todo 时未提供显式自动化设置
+- **THEN** 其模式为 `disabled`、需要确认且不允许任何能力

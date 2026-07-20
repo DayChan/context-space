@@ -1,44 +1,44 @@
-## 1. Project Foundation
+## 1. 项目基础
 
-- [x] 1.1 Add the TypeScript, React, Vite, server, test, and lint project configuration with runnable npm scripts
-- [x] 1.2 Add Git ignore rules and document local development, workspace, synchronization, testing, and privacy behavior
-- [x] 1.3 Implement idempotent workspace initialization with baseline config, summary, Loop policy, and run-history locations
+- [x] 1.1 添加 TypeScript、React、Vite、服务端、测试和代码检查配置，并提供可运行的 npm 脚本
+- [x] 1.2 添加 Git 忽略规则，并记录本地开发、工作区、同步、测试和隐私行为
+- [x] 1.3 实现幂等的工作区初始化，创建基础配置、摘要、Loop 策略和运行历史位置
 
-## 2. Markdown Store and Index
+## 2. Markdown 存储与索引
 
-- [x] 2.1 Define versioned document, source, Todo, person, knowledge, sync, and automation TypeScript contracts
-- [x] 2.2 Implement safe Markdown parsing, path containment, atomic writes, and optimistic concurrency
-- [x] 2.3 Implement a rebuildable in-memory search and backlink index over canonical Markdown
+- [x] 2.1 定义版本化的文档、来源、Todo、人物、知识、同步和自动化 TypeScript 契约
+- [x] 2.2 实现安全的 Markdown 解析、路径约束、原子写入和乐观并发
+- [x] 2.3 基于规范 Markdown 实现可重建的内存搜索和反向链接索引
 
-## 3. Domain Analysis
+## 3. 领域分析
 
-- [x] 3.1 Implement Todo defaults, lifecycle projections, explainable priority scoring, manual overrides, and Leader boosts
-- [x] 3.2 Implement stable people discovery, Leader configuration, evidence filtering, and mutual-commitment projections
-- [x] 3.3 Implement deterministic Todo and knowledge candidate extraction with provenance and confidence
-- [x] 3.4 Implement Now, Inbox, timeline, knowledge-change, and Loop-readiness aggregation
+- [x] 3.1 实现 Todo 默认值、生命周期投影、可解释优先级评分、手动覆盖和 Leader 加权
+- [x] 3.2 实现稳定的人物发现、Leader 配置、证据过滤和双向承诺投影
+- [x] 3.3 实现带来源依据和置信度的确定性 Todo 与知识候选提取
+- [x] 3.4 实现 Now、Inbox、时间线、知识变更和 Loop 就绪度聚合
 
-## 4. Lark Adapter
+## 4. 飞书适配器
 
-- [x] 4.1 Implement an injected `lark-cli` command runner with a strict read-only allowlist and user identity
-- [x] 4.2 Implement bounded mention, P2P, calendar, task, and self/contact retrieval and normalization
-- [x] 4.3 Implement checkpoint overlap, stable-ID deduplication, partial-failure isolation, source persistence, and sync status
+- [x] 4.1 实现可注入的 `lark-cli` 命令运行器，并强制使用严格只读白名单和用户身份
+- [x] 4.2 实现有边界的提及、P2P、日历、任务和当前用户/联系人获取与标准化
+- [x] 4.3 实现检查点重叠、稳定 ID 去重、局部失败隔离、来源持久化和同步状态
 
-## 5. Local API
+## 5. 本地 API
 
-- [x] 5.1 Implement a loopback-only server with health, overview, document, search, configuration, and timeline APIs
-- [x] 5.2 Implement optimistic document updates, Leader configuration, index rebuild, and manual Lark synchronization APIs
-- [x] 5.3 Ensure no V1 automation execution endpoint or external-action code path exists
+- [x] 5.1 实现仅监听回环地址的服务，提供健康检查、概览、文档、搜索、配置和时间线 API
+- [x] 5.2 实现乐观并发文档更新、Leader 配置、索引重建和手动飞书同步 API
+- [x] 5.3 确保 V1 不存在自动化执行端点或外部动作代码路径
 
-## 6. Web Workbench
+## 6. Web 工作台
 
-- [x] 6.1 Implement the responsive application shell, visual system, global search, and eight primary routes
-- [x] 6.2 Implement Now, Inbox, and Todos pages with priority explanations, filters, evidence, and empty states
-- [x] 6.3 Implement People, Knowledge, and Timeline pages with provenance and relationship views
-- [x] 6.4 Implement Loop and Settings pages with readiness categories, disabled automation messaging, sync status, and Leader controls
+- [x] 6.1 实现响应式应用外壳、视觉系统、全局搜索和八个主要路由
+- [x] 6.2 实现 Now、Inbox 和 Todos 页面，包括优先级解释、筛选、证据和空状态
+- [x] 6.3 实现 People、Knowledge 和 Timeline 页面，包括来源依据和关系视图
+- [x] 6.4 实现 Loop 和 Settings 页面，包括就绪度分类、自动化禁用提示、同步状态和 Leader 控件
 
-## 7. Verification
+## 7. 验证
 
-- [x] 7.1 Add unit and integration tests for workspace storage, path safety, concurrency, index rebuild, priority, people, and extraction
-- [x] 7.2 Add adapter and API tests for read-only commands, idempotent sync, partial failures, routes, and absence of an execution endpoint
-- [x] 7.3 Add frontend tests for navigation, Now content, Todo filtering, provenance, and the disabled Loop surface
-- [x] 7.4 Run type checking, linting, all tests, and production builds; resolve failures and record the verified commands
+- [x] 7.1 为工作区存储、路径安全、并发、索引重建、优先级、人物和提取逻辑添加单元与集成测试
+- [x] 7.2 为只读命令、幂等同步、局部失败、API 路由和不存在执行端点添加适配器与 API 测试
+- [x] 7.3 为导航、Now 内容、Todo 筛选、来源依据和禁用的 Loop 界面添加前端测试
+- [x] 7.4 运行类型检查、代码检查、全部测试和生产构建；解决失败并记录通过验证的命令

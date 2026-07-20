@@ -1,36 +1,36 @@
 ## ADDED Requirements
 
-### Requirement: Read-only user identity
-The Lark adapter MUST invoke supported retrieval commands with user identity and MUST NOT invoke Lark mutation commands.
+### Requirement: 只读用户身份
+飞书适配器 MUST 使用用户身份调用受支持的读取命令，并 MUST NOT 调用飞书修改命令。
 
-#### Scenario: Build a synchronization run
-- **WHEN** a user starts a Lark synchronization
-- **THEN** every generated command uses `--as user` and belongs to the configured read-only command allowlist
+#### Scenario: 构建一次同步运行
+- **WHEN** 用户启动飞书同步
+- **THEN** 每条生成的命令都使用 `--as user`，并属于已配置的只读命令白名单
 
-### Requirement: Relevant context collection
-The adapter SHALL collect group messages that mention the user, both sides of P2P conversations, calendar events in the configured rolling window, and tasks assigned to the user.
+### Requirement: 相关上下文采集
+适配器 SHALL 采集提及用户的群消息、P2P 对话双方的消息、配置的滚动窗口内的日历日程，以及分配给用户的任务。
 
-#### Scenario: Synchronize all enabled Lark sources
-- **WHEN** all Lark commands return valid records
-- **THEN** the system writes normalized mention, P2P, calendar, and task source Markdown documents with provider-stable source IDs
+#### Scenario: 同步所有已启用的飞书来源
+- **WHEN** 所有飞书命令都返回有效记录
+- **THEN** 系统写入标准化的提及、P2P、日历和任务来源 Markdown 文档，并使用提供方范围内稳定的来源 ID
 
-### Requirement: Incremental and idempotent synchronization
-The adapter SHALL use checkpoints, an overlap window, pagination, and stable source IDs so repeated runs do not create duplicate records.
+### Requirement: 增量且幂等的同步
+适配器 SHALL 使用检查点、重叠窗口、分页和稳定来源 ID，确保重复运行不会创建重复记录。
 
-#### Scenario: Repeat an overlapping run
-- **WHEN** a second run returns records already captured by the first run plus one new record
-- **THEN** existing records are updated or skipped and exactly one new canonical source record is created
+#### Scenario: 重复执行存在重叠的运行
+- **WHEN** 第二次运行返回第一次已经采集的记录，并额外返回一条新记录
+- **THEN** 系统更新或跳过现有记录，并且只创建一条新的规范来源记录
 
-### Requirement: Bounded backfill
-The adapter SHALL split initial message backfill into configurable time windows and surface whether pagination or a page cap left a window incomplete.
+### Requirement: 有边界的回填
+适配器 SHALL 将初始消息回填拆分为可配置的时间窗口，并展示分页或页数上限是否导致某个窗口未完成。
 
-#### Scenario: Backfill exceeds one result window
-- **WHEN** an initial date range spans multiple configured windows
-- **THEN** the adapter requests each window separately and advances the checkpoint only for completed windows
+#### Scenario: 回填范围超过一个结果窗口
+- **WHEN** 初始日期范围跨越多个已配置窗口
+- **THEN** 适配器分别请求每个窗口，并且只为已完成的窗口推进检查点
 
-### Requirement: Failure isolation and status
-The adapter SHALL report per-source success, failure, counts, timestamps, and actionable error messages without discarding previously valid checkpoints.
+### Requirement: 失败隔离与状态
+适配器 SHALL 按来源报告成功、失败、数量、时间戳和可操作的错误消息，同时保留之前有效的检查点。
 
-#### Scenario: Calendar retrieval fails
-- **WHEN** messages and tasks succeed but the calendar command fails
-- **THEN** successful sources are persisted, calendar failure is shown in sync status, and the calendar checkpoint is not advanced
+#### Scenario: 日历获取失败
+- **WHEN** 消息和任务同步成功，但日历命令失败
+- **THEN** 系统持久化成功的来源，在同步状态中展示日历失败，并且不推进日历检查点

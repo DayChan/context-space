@@ -1,36 +1,36 @@
 ## ADDED Requirements
 
-### Requirement: Stable source-neutral identity
-The system SHALL create an internal stable person ID and associate it with one or more provider identities without using display names as primary keys.
+### Requirement: 稳定且来源无关的身份
+系统 SHALL 创建内部稳定人物 ID，并将其与一个或多个提供方身份关联，不使用显示名称作为主键。
 
-#### Scenario: Discover a Lark participant
-- **WHEN** a previously unknown Lark open ID appears in relevant context
-- **THEN** one person profile is created and subsequent occurrences update that profile rather than creating duplicates
+#### Scenario: 发现飞书参与者
+- **WHEN** 之前未知的飞书 open ID 出现在相关上下文中
+- **THEN** 系统创建一份人物档案，后续再次出现时更新该档案，而不是创建重复档案
 
-### Requirement: Evidence-backed profile content
-Profiles SHALL distinguish directory facts, manual notes, and generated workplace observations, and generated observations MUST include evidence, confidence, and update time.
+### Requirement: 有证据支撑的档案内容
+人物档案 SHALL 区分通讯录事实、手动备注和生成的职场观察；生成观察 MUST 包含证据、置信度和更新时间。
 
-#### Scenario: Add a collaboration observation
-- **WHEN** analysis infers a work collaboration preference from captured messages
-- **THEN** the observation is labeled as inferred and links to its supporting source records
+#### Scenario: 添加协作观察
+- **WHEN** 分析根据已采集消息推断出工作协作偏好
+- **THEN** 该观察被标记为推断内容，并链接到支撑它的来源记录
 
-### Requirement: Sensitive inference prohibition
-The system MUST NOT generate protected or sensitive personal attributes from work context.
+### Requirement: 禁止敏感推断
+系统 MUST NOT 根据工作上下文生成受保护或敏感的个人属性。
 
-#### Scenario: Analyze unrelated sensitive language
-- **WHEN** a source message contains language that could imply a sensitive personal attribute
-- **THEN** no corresponding profile trait is created
+#### Scenario: 分析无关的敏感语言
+- **WHEN** 来源消息包含可能暗示敏感个人属性的语言
+- **THEN** 系统不创建对应的人物档案特征
 
-### Requirement: Computed mutual commitments
-The system SHALL compute what the user owes a person and what is waiting on that person from canonical Todo stakeholder references.
+### Requirement: 计算双向承诺
+系统 SHALL 根据规范 Todo 的相关人员引用，计算用户欠某个人的事项，以及正在等待该人的事项。
 
-#### Scenario: View a person's commitments
-- **WHEN** a person is a stakeholder on one `owed_by_me` and one `waiting_on_them` Todo
-- **THEN** the profile view lists each Todo in the appropriate computed section without duplicating Todo state
+#### Scenario: 查看某人的承诺事项
+- **WHEN** 某人分别是一个 `owed_by_me` Todo 和一个 `waiting_on_them` Todo 的相关人员
+- **THEN** 人物档案视图在对应的计算区域列出两个 Todo，且不复制 Todo 状态
 
-### Requirement: Manual Leader designation
-Only an explicit user configuration SHALL designate a person as a Leader and define their priority boost.
+### Requirement: 手动指定 Leader
+只有显式的用户配置 SHALL 将某人指定为 Leader 并定义其优先级加权。
 
-#### Scenario: Mark a person as Leader
-- **WHEN** the user saves a Leader configuration for a stable person ID
-- **THEN** the profile shows the designation and eligible Todo priority calculations use the configured boost
+#### Scenario: 将人物标记为 Leader
+- **WHEN** 用户为稳定人物 ID 保存 Leader 配置
+- **THEN** 人物档案展示该标记，符合条件的 Todo 优先级计算使用已配置的加权

@@ -1,40 +1,40 @@
 ## ADDED Requirements
 
-### Requirement: Workspace layout initialization
-The system SHALL initialize the configured workspace with separate locations for configuration, Lark sources, Inbox candidates, Todo items and views, people, typed knowledge, summaries, Loop policy placeholders, and internal sync state.
+### Requirement: 工作区布局初始化
+系统 SHALL 初始化已配置的工作区，并为配置、飞书来源、Inbox 候选、Todo 条目与视图、人物、分类知识、摘要、Loop 策略占位符和内部同步状态创建独立位置。
 
-#### Scenario: Initialize an empty workspace
-- **WHEN** the application starts with a writable empty workspace path
-- **THEN** it creates every required directory and baseline configuration document without creating duplicate content on a second start
+#### Scenario: 初始化空工作区
+- **WHEN** 应用使用一个可写的空工作区路径启动
+- **THEN** 系统创建所有必需目录和基础配置文档，第二次启动时不会产生重复内容
 
-### Requirement: Versioned Markdown documents
-The system SHALL store canonical business records as Markdown with versioned YAML frontmatter containing a stable ID, type, management mode, timestamps, and source references where applicable.
+### Requirement: 版本化 Markdown 文档
+系统 SHALL 将规范业务记录存储为 Markdown，并使用版本化 YAML frontmatter 记录稳定 ID、类型、管理模式、时间戳以及适用时的来源引用。
 
-#### Scenario: Read and write a Todo document
-- **WHEN** a valid Todo document is saved and then loaded
-- **THEN** the system returns the same typed metadata and Markdown body with its stable ID unchanged
+#### Scenario: 读写 Todo 文档
+- **WHEN** 保存并随后加载一份有效的 Todo 文档
+- **THEN** 系统返回相同的类型化元数据和 Markdown 正文，且稳定 ID 保持不变
 
-### Requirement: Safe atomic persistence
-The system MUST constrain document paths to the workspace root, reject path traversal, and replace documents atomically.
+### Requirement: 安全的原子持久化
+系统 MUST 将文档路径限制在工作区根目录内、拒绝路径穿越，并以原子方式替换文档。
 
-#### Scenario: Reject an unsafe path
-- **WHEN** a caller attempts to read or write a path that escapes the workspace root
-- **THEN** the operation fails without creating or modifying a file outside the workspace
+#### Scenario: 拒绝不安全路径
+- **WHEN** 调用方尝试读写逃逸出工作区根目录的路径
+- **THEN** 操作失败，且不会在工作区外创建或修改文件
 
-#### Scenario: Replace a valid document
-- **WHEN** a valid document update succeeds
-- **THEN** readers observe either the previous complete file or the new complete file and no temporary file remains
+#### Scenario: 替换有效文档
+- **WHEN** 有效的文档更新成功
+- **THEN** 读取方只能观察到之前的完整文件或新的完整文件，并且不会残留临时文件
 
-### Requirement: Rebuildable index
-The system SHALL build search and backlink results entirely from canonical Markdown documents.
+### Requirement: 可重建索引
+系统 SHALL 完全根据规范 Markdown 文档构建搜索和反向链接结果。
 
-#### Scenario: Rebuild after cache removal
-- **WHEN** generated index state is removed and a rebuild is requested
-- **THEN** searchable documents and source-reference backlinks are restored without changing canonical Markdown
+#### Scenario: 删除缓存后重建
+- **WHEN** 删除生成的索引状态并请求重建
+- **THEN** 系统恢复可搜索文档和来源引用反向链接，且不改变规范 Markdown
 
-### Requirement: Management mode protection
-The system MUST preserve user-owned fields and content when processing `manual` or `hybrid` documents.
+### Requirement: 管理模式保护
+系统 MUST 在处理 `manual` 或 `hybrid` 文档时保留用户拥有的字段和内容。
 
-#### Scenario: Refresh a hybrid profile
-- **WHEN** an analyzer refreshes a hybrid profile containing user-edited fields
-- **THEN** generated observations may change but user-owned values remain unchanged
+#### Scenario: 刷新混合管理的人物档案
+- **WHEN** 分析器刷新包含用户编辑字段的混合管理人物档案
+- **THEN** 生成的观察可以变化，但用户拥有的值保持不变

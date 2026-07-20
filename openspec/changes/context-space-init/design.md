@@ -1,59 +1,59 @@
-## Context
+## 背景
 
-The repository currently contains only OpenSpec configuration. The product is a single-user, local-first work context system whose canonical data lives in human-readable Markdown. V1 reads relevant Lark data through the locally installed `lark-cli`, synthesizes Todo, people, knowledge, and summary views, and serves a localhost Web UI. The design must preserve source provenance, protect manual edits, avoid credential storage, and leave an explicit but non-executing boundary for a future automation Loop.
+仓库最初只包含 OpenSpec 配置。本产品是一个单用户、本地优先的工作上下文系统，规范数据以人类可读的 Markdown 保存。V1 通过本机安装的 `lark-cli` 读取相关飞书数据，生成 Todo、人物、知识和摘要视图，并提供仅在本机访问的 Web 界面。设计必须保留来源依据、保护手动编辑、不存储凭证，并为未来的自动化 Loop 划定清晰但不执行动作的边界。
 
-The main stakeholders are the workspace owner, who needs a trustworthy daily work surface, and future adapter or automation authors, who need stable source-neutral contracts.
+主要利益相关者包括需要可信日常工作界面的工作区所有者，以及需要稳定、来源无关契约的未来适配器或自动化功能开发者。
 
-## Goals / Non-Goals
+## 目标 / 非目标
 
-**Goals:**
+**目标：**
 
-- Deliver a runnable TypeScript application with a local API server and React frontend.
-- Keep Markdown as the only canonical business data and make all indexes disposable.
-- Provide safe workspace initialization, typed document parsing, atomic writes, search, and backlinks.
-- Read group mentions, P2P messages, calendar events, tasks, and people from `lark-cli --as user`.
-- Produce explainable Todo priorities, people views, knowledge pages, and a Now summary.
-- Expose source references and generated/manual/hybrid ownership in both APIs and UI.
-- Make Loop visible in navigation and document contracts without providing any execution path.
-- Cover core logic, storage, synchronization, API behavior, and frontend rendering with automated tests.
+- 交付可运行的 TypeScript 应用，包含本地 API 服务和 React 前端。
+- 将 Markdown 保持为唯一规范业务数据，并允许丢弃和重建所有索引。
+- 提供安全的工作区初始化、类型化文档解析、原子写入、搜索和反向链接。
+- 通过 `lark-cli --as user` 读取群聊提及、P2P 消息、日历日程、任务和人物。
+- 生成可解释的 Todo 优先级、人物视图、知识页面和 Now 摘要。
+- 在 API 和 UI 中展示来源引用以及生成/手动/混合内容的所有权。
+- 让 Loop 出现在导航和文档契约中，但不提供任何执行路径。
+- 使用自动化测试覆盖核心逻辑、存储、同步、API 行为和前端渲染。
 
-**Non-Goals:**
+**非目标：**
 
-- Executing tools or mutating Lark resources.
-- Hosted multi-user deployment, remote authentication, or collaborative editing.
-- A mandatory remote LLM provider in V1.
-- Full archive of every group message or binary attachment analysis.
-- A durable database that can diverge from Markdown.
+- 执行工具或修改飞书资源。
+- 提供托管式多用户部署、远程认证或协同编辑。
+- 在 V1 中强制依赖远程 LLM 提供方。
+- 完整归档每一条群消息或分析二进制附件。
+- 引入可能与 Markdown 产生分歧的持久化数据库。
 
-## Decisions
+## 决策
 
-### Use a modular TypeScript application
+### 使用模块化 TypeScript 应用
 
-The repository will use one npm project with clear `core`, `server`, `adapters`, and `web` modules. A Node server provides filesystem and `lark-cli` access; a React/Vite client provides the workbench. This keeps a single language across contracts and UI while retaining boundaries that can later become packages.
+仓库使用单个 npm 项目，并明确划分 `core`、`server`、`adapters` 和 `web` 模块。Node 服务负责文件系统和 `lark-cli` 访问，React/Vite 客户端提供工作台。这样既能让契约和 UI 使用同一种语言，也能保留未来拆分为独立包的边界。
 
-Alternatives considered:
+考虑过的备选方案：
 
-- A static-only site cannot safely access local Markdown or invoke `lark-cli`.
-- A database-first framework conflicts with the Markdown canonical-source requirement.
-- Separate services add operational cost without benefit for a single-user V1.
+- 纯静态站点无法安全访问本地 Markdown 或调用 `lark-cli`。
+- 数据库优先的框架与 Markdown 作为规范数据源的要求冲突。
+- 对单用户 V1 而言，拆分多个服务只会增加运维成本，无法带来相应收益。
 
-### Make Markdown canonical and indexes rebuildable
+### 以 Markdown 为规范数据并支持索引重建
 
-The workspace root defaults to `./workspace` and can be overridden with `CONTEXT_SPACE_ROOT`. Every document has YAML frontmatter with a versioned schema, stable ID, type, management mode, timestamps, and source references. Writes use a temporary sibling file followed by atomic rename. Paths are resolved below the workspace root and traversal is rejected.
+工作区根目录默认是 `./workspace`，可通过 `CONTEXT_SPACE_ROOT` 覆盖。每份文档都包含 YAML frontmatter，其中记录版本化模式、稳定 ID、类型、管理模式、时间戳和来源引用。写入时先创建同目录临时文件，再执行原子重命名。所有路径都解析到工作区根目录之下，并拒绝路径穿越。
 
-Search and backlink data are built in memory from Markdown on startup or explicit rebuild. This is simpler than SQLite for V1 while preserving the contract that a future SQLite index is only a cache.
+系统在启动或显式重建时，根据 Markdown 在内存中构建搜索和反向链接数据。对 V1 而言，这比 SQLite 更简单，同时保留“未来 SQLite 索引也只能作为缓存”的契约。
 
-### Separate source documents from derived documents
+### 分离来源文档与派生文档
 
-Adapters write normalized source documents under `sources/<provider>/`. Domain analyzers read those documents and create candidates or derived documents under `inbox`, `todos`, `people`, `knowledge`, and `summaries`. Source documents are generated, derived documents are generated or hybrid, and user-owned configuration is manual.
+适配器将标准化来源文档写入 `sources/<provider>/`。领域分析器读取这些文档，并在 `inbox`、`todos`、`people`、`knowledge` 和 `summaries` 下创建候选或派生文档。来源文档由系统生成；派生文档可以是生成或混合管理；用户拥有的配置则采用手动管理。
 
-Every derived document stores stable `source_refs`; the system never relies on a generated summary as the sole evidence for another conclusion.
+每份派生文档都保存稳定的 `source_refs`；系统绝不会把生成摘要作为得出另一项结论的唯一证据。
 
-### Define a source-neutral adapter contract
+### 定义来源无关的适配器契约
 
-Adapters return normalized records with `sourceId`, `kind`, timestamps, participants, text, and provider metadata. Lark-specific fields remain in provider metadata. Stable IDs use provider namespaces, such as `lark:message:om_xxx`.
+适配器返回包含 `sourceId`、`kind`、时间戳、参与者、文本和提供方元数据的标准化记录。飞书专属字段保留在提供方元数据中。稳定 ID 使用提供方命名空间，例如 `lark:message:om_xxx`。
 
-The Lark adapter invokes `lark-cli` with `execFile` and an argument array, never a shell string. V1 exposes only read operations:
+飞书适配器使用 `execFile` 和参数数组调用 `lark-cli`，绝不拼接 shell 字符串。V1 只开放以下读取操作：
 
 - `contact +get-user`
 - `im +messages-search --is-at-me`
@@ -61,31 +61,31 @@ The Lark adapter invokes `lark-cli` with `execFile` and an argument array, never
 - `calendar +agenda`
 - `task +get-my-tasks`
 
-Initial backfill is split into bounded time windows. Incremental runs use a checkpoint, an overlap window, and stable-ID deduplication. Partial failures are reported per source and do not corrupt the previous checkpoint.
+初次回填被拆分为有边界的时间窗口。增量运行使用检查点、重叠窗口和稳定 ID 去重。系统按来源报告局部失败，且不会破坏之前的检查点。
 
-### Use deterministic V1 analysis behind replaceable interfaces
+### 在可替换接口后使用确定性的 V1 分析
 
-V1 ships deterministic extractors for explicit action language, due dates already present in source metadata, people discovery, and knowledge candidates. Analyzer interfaces accept structured source records so a future local or remote LLM can replace or augment heuristics without changing storage or UI contracts.
+V1 提供确定性提取器，用于识别明确的行动语言、来源元数据中已有的截止日期、人物和知识候选项。分析器接口接收结构化来源记录，因此未来可以用本地或远程 LLM 替换或增强启发式规则，而无需改变存储或 UI 契约。
 
-Native Lark tasks become authoritative Todo items. Explicit but non-native actions become candidates unless confidence crosses a configured threshold. Knowledge extraction creates drafts by default.
+飞书原生任务会成为权威 Todo。明确但非原生的行动项会先成为候选，除非其置信度超过配置阈值。知识提取默认创建草稿。
 
-### Keep priority scoring explainable
+### 保持优先级评分可解释
 
-Priority is represented by a base score, named boosts, an effective score, and an optional manual override. Due urgency, explicit assignment, staleness, and Leader involvement are independent named reasons. Leader configuration is manual and applies to `owed_by_me` execution or follow-up visibility, not to work that a Leader owes the user.
+优先级由基础分、具名加权、最终分和可选的手动覆盖值组成。截止紧迫度、明确指派、停滞时间和 Leader 参与分别作为独立的具名原因。Leader 配置由用户手动维护，只影响 `owed_by_me` 方向的执行优先级或跟进可见性，不影响 Leader 欠用户的工作。
 
-### Compute relationship views instead of duplicating facts
+### 通过计算关系视图避免重复事实
 
-People profiles contain identities, facts, observations, and evidence. Mutual commitments are projections over Todo stakeholder references, so profile pages never store a second editable copy of Todo state. Cross-provider identity merging is manual in V1.
+人物档案包含身份、事实、观察和证据。双向承诺通过 Todo 的相关人员引用计算得出，因此人物页面不会存储第二份可编辑的 Todo 状态副本。V1 中跨提供方的身份合并必须手动完成。
 
-### Serve a localhost API and route-based workbench
+### 提供本机 API 和基于路由的工作台
 
-The server binds to `127.0.0.1` by default. JSON APIs expose overview, documents, search, configuration, and Lark sync status. The React app has stable top-level routes for Now, Inbox, Todos, People, Knowledge, Timeline, Loop, and Settings.
+服务默认绑定到 `127.0.0.1`。JSON API 提供概览、文档、搜索、配置和飞书同步状态。React 应用为 Now、Inbox、Todos、People、Knowledge、Timeline、Loop 和 Settings 提供稳定的顶级路由。
 
-The UI distinguishes generated content from manual or hybrid content and displays provenance and priority reasons.
+UI 会区分生成内容与手动或混合内容，并展示来源依据和优先级原因。
 
-### Make Loop an intentionally inert boundary
+### 将 Loop 设为有意保持惰性的边界
 
-Todo documents include:
+Todo 文档包含：
 
 ```yaml
 automation:
@@ -95,35 +95,35 @@ automation:
   allowed_capabilities: []
 ```
 
-V1 has a Loop page and readiness cards but no execute endpoint, scheduler, tool registry, or enabled action control. Future execution will require `status: open`, `automation.mode: approved`, policy authorization, confirmation rules, and auditable runs.
+V1 包含 Loop 页面和就绪度卡片，但没有执行端点、调度器、工具注册表或启用的动作控件。未来执行必须同时满足 `status: open`、`automation.mode: approved`、策略授权、确认规则和可审计运行等条件。
 
-### Test at domain, integration, API, and UI layers
+### 在领域、集成、API 和 UI 层进行测试
 
-Vitest covers pure domain logic and temporary-directory storage integration. Adapter tests use an injected command runner and never call a real Lark account. API tests run the local server against a temporary workspace. React Testing Library verifies navigation, Now, Todo priority explanations, and the disabled Loop surface.
+Vitest 覆盖纯领域逻辑以及使用临时目录的存储集成。适配器测试使用注入的命令运行器，绝不调用真实飞书账号。API 测试让本地服务运行在临时工作区上。React Testing Library 验证导航、Now、Todo 优先级解释和禁用的 Loop 界面。
 
-## Risks / Trade-offs
+## 风险 / 权衡
 
-- **[Markdown concurrency can lose edits]** → Use atomic writes, compare `updated_at`/ETag values, and reject stale updates.
-- **[Message search pagination can truncate backfill]** → Split time ranges, request all pages, record checkpoints, and surface incomplete runs.
-- **[Heuristic extraction can create false positives]** → Route uncertain actions and all knowledge extraction to Inbox drafts with evidence.
-- **[People observations can become invasive or wrong]** → Restrict to work behavior, attach confidence/evidence, and preserve user corrections.
-- **[Large workspaces can slow full scans]** → Keep the index replaceable, cache file metadata, and allow targeted rebuilds later.
-- **[Remote model use could expose sensitive data]** → Ship without a required remote model and make any future provider explicit and configurable.
-- **[Visible Loop UI could imply execution exists]** → Label it as disabled, remove action endpoints and controls, and test that no execution route exists.
-- **[Local server could be exposed accidentally]** → Bind to loopback by default and require explicit configuration for any other host.
+- **[Markdown 并发可能丢失编辑]** → 使用原子写入，对比 `updated_at`/ETag，并拒绝过期更新。
+- **[消息搜索分页可能截断回填]** → 拆分时间范围、请求所有分页、记录检查点，并展示未完成的运行。
+- **[启发式提取可能产生误报]** → 将不确定的行动项和所有知识提取结果送入带证据的 Inbox 草稿。
+- **[人物观察可能越界或出错]** → 仅限工作行为，附带置信度与证据，并保留用户修正。
+- **[大型工作区可能降低全量扫描速度]** → 保持索引可替换、缓存文件元数据，并在未来允许定向重建。
+- **[远程模型可能暴露敏感数据]** → 发布时不强制使用远程模型，并让任何未来提供方都显式且可配置。
+- **[可见的 Loop UI 可能让人误以为已有执行能力]** → 明确标注禁用状态，移除动作端点和控件，并测试不存在执行路由。
+- **[本地服务可能被意外暴露]** → 默认绑定回环地址，其他主机地址必须显式配置。
 
-## Migration Plan
+## 迁移计划
 
-1. Install dependencies and initialize the workspace layout on first run.
-2. Start with an empty source tree and generated empty-state summaries.
-3. Validate `lark-cli` availability and user authorization without changing Lark data.
-4. Run an optional bounded initial backfill, then persist the first checkpoint.
-5. Rebuild the index and expose the local workbench.
+1. 安装依赖，并在首次运行时初始化工作区布局。
+2. 从空的来源目录树和生成的空状态摘要开始。
+3. 在不修改飞书数据的前提下，验证 `lark-cli` 可用性和用户授权。
+4. 可选地运行一次有边界的初始回填，然后持久化首个检查点。
+5. 重建索引并开放本地工作台。
 
-Rollback consists of stopping the server and restoring or deleting the generated workspace. Canonical Markdown can be backed up independently; indexes can always be removed and rebuilt.
+回滚方式是停止服务，并恢复或删除生成的工作区。规范 Markdown 可以独立备份；索引始终可以删除后重新构建。
 
-## Open Questions
+## 开放问题
 
-- Which optional LLM provider, if any, should be enabled after the deterministic V1?
-- What retention window should apply to raw P2P transcripts and mention context after initial use?
-- Should future cross-source identity merges be manual-only or use reviewable suggestions?
+- 确定性 V1 之后是否应启用可选的 LLM 提供方？如果启用，应选择哪一个？
+- 初次使用后，原始 P2P 对话和提及上下文应采用多长的保留窗口？
+- 未来的跨来源身份合并应只允许手动完成，还是提供可审核的建议？
