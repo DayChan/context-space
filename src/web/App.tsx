@@ -719,12 +719,46 @@ function TodosPage() {
 
 function PeoplePage() {
   const { data, loading, error } = useApi<ApiDocument<PersonMetadata>[]>("/api/documents?type=person", []);
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filtered = useMemo(
+    () =>
+      data.filter(({ data: person }) => {
+        if (!normalizedQuery) return true;
+        return [
+          person.title,
+          person.role ?? "",
+          ...person.identities.flatMap((identity) => [
+            identity.display_name ?? "",
+            identity.external_id
+          ]),
+          ...person.observations.flatMap((observation) => [
+            observation.text,
+            ...observation.evidence
+          ])
+        ].some((value) =>
+          value.toLocaleLowerCase().includes(normalizedQuery)
+        );
+      }),
+    [data, normalizedQuery]
+  );
   return (
     <>
       <PageHeader eyebrow="Working relationships" title="People" description="角色、协作观察和双方承诺，全部带证据并可修正。" />
       <ErrorBanner message={error} />
+      <label className="people-page-search">
+        <Search size={16} />
+        <input
+          aria-label="搜索 People"
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索姓名、角色、身份或观察"
+          type="search"
+          value={query}
+        />
+        <span>{filtered.length} / {data.length}</span>
+      </label>
       <div className="people-grid">
-        {data.map((document) => {
+        {filtered.map((document) => {
           const person = document.data;
           const responsibility = person.observations.find(
             (observation) =>
@@ -747,7 +781,23 @@ function PeoplePage() {
           );
         })}
       </div>
-      {!data.length && <EmptyState icon={Users} title={loading ? "正在加载…" : "还没有人物档案"} description="相关消息、日程和任务会自动发现协作对象。" />}
+      {!filtered.length && (
+        <EmptyState
+          icon={Users}
+          title={
+            loading
+              ? "正在加载…"
+              : data.length
+                ? "没有匹配人物"
+                : "还没有人物档案"
+          }
+          description={
+            data.length
+              ? "尝试搜索姓名、角色、身份或职场观察。"
+              : "相关消息、日程和任务会自动发现协作对象。"
+          }
+        />
+      )}
     </>
   );
 }

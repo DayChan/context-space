@@ -94,6 +94,33 @@ const personWithInsight: PersonMetadata = {
   last_interaction_at: "2026-07-20T02:00:00Z"
 };
 
+const personBob: PersonMetadata = {
+  ...personWithInsight,
+  id: "person_bob",
+  title: "Bob",
+  source_refs: ["lark:message:bob_1"],
+  identities: [
+    {
+      provider: "lark",
+      external_id: "ou_bob",
+      display_name: "Robert"
+    }
+  ],
+  role: "后端负责人",
+  role_origin: "manual",
+  observations: [
+    {
+      text: "负责数据库容量规划。",
+      evidence: ["Bob 维护容量基线"],
+      confidence: 0.92,
+      observed_at: "2026-07-19T02:00:00Z",
+      origin: "inferred",
+      category: "responsibility",
+      source_refs: ["lark:message:bob_1"]
+    }
+  ]
+};
+
 const personProvenanceSources = Array.from({ length: 11 }, (_, index) => {
   if (index === 0) {
     return {
@@ -296,6 +323,12 @@ beforeEach(() => {
             data: personWithInsight,
             body: "# Alice",
             etag: "person-etag"
+          },
+          {
+            path: "people/person_bob.md",
+            data: personBob,
+            body: "# Bob",
+            etag: "person-bob-etag"
           }
         ]);
       }
@@ -356,6 +389,24 @@ describe("Context Space workbench", () => {
     for (const label of ["Now", "Inbox", "Todos", "People", "Knowledge", "Timeline", "Loop", "Settings"]) {
       expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
     }
+  });
+
+  it("searches and filters People by profile content", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/people"]}><AppView /></MemoryRouter>);
+    const search = await screen.findByLabelText("搜索 People");
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("Bob")).toBeInTheDocument();
+
+    await user.type(search, "后端");
+    expect(screen.queryByText("Alice")).not.toBeInTheDocument();
+    expect(screen.getByText("Bob")).toBeInTheDocument();
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+
+    await user.clear(search);
+    await user.type(search, "阻塞项");
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.queryByText("Bob")).not.toBeInTheDocument();
   });
 
   it("filters Todo items waiting on another person", async () => {
