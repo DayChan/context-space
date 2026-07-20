@@ -7,6 +7,7 @@ import {
   CalendarDays,
   Check,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   CircleUserRound,
   Clock3,
@@ -15,6 +16,7 @@ import {
   LayoutDashboard,
   ListTodo,
   Menu,
+  Plus,
   RefreshCw,
   Search,
   Settings,
@@ -67,6 +69,12 @@ interface ApiDocument<T extends BaseMetadata = BaseMetadata> extends WorkspaceDo
     occurred_at: string;
     source_kind: SourceMetadata["source_kind"];
   }>;
+  provenancePagination?: {
+    page: number;
+    page_size: number;
+    total: number;
+    total_pages: number;
+  };
   relationships?: {
     owedByMe: TodoMetadata[];
     waitingOnThem: TodoMetadata[];
@@ -424,7 +432,15 @@ function Priority({ todo }: { todo: TodoMetadata }) {
   );
 }
 
-function TodoRow({ todo, compact = false }: { todo: TodoMetadata; compact?: boolean }) {
+function TodoRow({
+  todo,
+  compact = false,
+  onStatusChanged
+}: {
+  todo: TodoMetadata;
+  compact?: boolean;
+  onStatusChanged?: () => void | Promise<void>;
+}) {
   const [statusOverride, setStatusOverride] = useState<TodoMetadata["status"] | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -440,6 +456,7 @@ function TodoRow({ todo, compact = false }: { todo: TodoMetadata; compact?: bool
         method: "PATCH",
         body: JSON.stringify({ status: next })
       });
+      await onStatusChanged?.();
     } catch (caught) {
       setStatusOverride(null);
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -597,27 +614,63 @@ function NowPage() {
 }
 
 function InboxPage() {
-  const { data, loading, error } = useApi<ApiDocument[]>("/api/documents?type=candidate", []);
+  const { data, loading, error, reload } = useApi<ApiDocument[]>("/api/documents?type=candidate", []);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState("");
+
+  async function confirmCandidate(document: ApiDocument) {
+    setConfirming(document.data.id);
+    setConfirmError("");
+    try {
+      await api(`/api/inbox/${encodeURIComponent(document.data.id)}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ etag: document.etag })
+      });
+      await reload();
+    } catch (caught) {
+      setConfirmError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setConfirming(null);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Review queue" title="Inbox" description="不确定的 Todo 和知识先在这里等待确认，而不是直接污染事实。" />
-      <ErrorBanner message={error} />
+      <ErrorBanner message={error ?? confirmError} />
       <div className="document-grid">
         {data.map((document) => (
-          <Link className="document-card" key={document.data.id} to={`/documents/${encodeURIComponent(document.data.id)}`}>
-            <div className="document-card-top">
-              <Badge tone="amber">{document.data.status === "candidate" ? "Todo 候选" : "知识草稿"}</Badge>
-              {typeof document.data.confidence === "number" && (
-                <span>
-                  {document.data.analysis ? `${document.data.analysis.provider} · ` : ""}
-                  {Math.round(document.data.confidence * 100)}% confidence
-                </span>
-              )}
+          <article className="document-card" key={document.data.id}>
+            <Link className="document-card-link" to={`/documents/${encodeURIComponent(document.data.id)}`}>
+              <div className="document-card-top">
+                <Badge tone="amber">{document.data.status === "candidate" ? "Todo 候选" : "知识草稿"}</Badge>
+                {typeof document.data.confidence === "number" && (
+                  <span>
+                    {document.data.analysis ? `${document.data.analysis.provider} · ` : ""}
+                    {Math.round(document.data.confidence * 100)}% confidence
+                  </span>
+                )}
+              </div>
+              <h3>{document.data.title}</h3>
+              <p>{document.body || "等待人工检查来源和上下文。"}</p>
+            </Link>
+            <div className="document-card-foot">
+              <span>{document.data.source_refs.length} 个来源</span>
+              <Link aria-label={`查看 ${document.data.title}`} to={`/documents/${encodeURIComponent(document.data.id)}`}>
+                <ChevronRight size={16} />
+              </Link>
+              <button
+                aria-label={`确认 ${document.data.title}`}
+                className="confirm-candidate"
+                disabled={confirming === document.data.id}
+                onClick={() => void confirmCandidate(document)}
+                type="button"
+              >
+                <Check size={14} />
+                {confirming === document.data.id ? "确认中…" : "确认"}
+              </button>
             </div>
-            <h3>{document.data.title}</h3>
-            <p>{document.body || "等待人工检查来源和上下文。"}</p>
-            <div className="document-card-foot"><span>{document.data.source_refs.length} 个来源</span><ChevronRight size={16} /></div>
-          </Link>
+          </article>
         ))}
       </div>
       {!data.length && <EmptyState icon={Inbox} title={loading ? "正在加载…" : "Inbox 已清空"} description="低置信度推断会保留来源并进入这里。" />}
@@ -626,28 +679,39 @@ function InboxPage() {
 }
 
 function TodosPage() {
-  const [direction, setDirection] = useState("all");
-  const { data, loading, error } = useApi<ApiDocument<TodoMetadata>[]>("/api/documents?type=todo", []);
+  const [category, setCategory] = useState("active");
+  const {
+    data,
+    loading,
+    error,
+    reload
+  } = useApi<ApiDocument<TodoMetadata>[]>("/api/documents?type=todo", []);
   const filtered = useMemo(
-    () => data.filter(({ data: todo }) => direction === "all" || todo.direction === direction),
-    [data, direction]
+    () =>
+      data.filter(({ data: todo }) => {
+        if (category === "done") return todo.status === "done";
+        if (todo.status === "done") return false;
+        return category === "active" || todo.direction === category;
+      }),
+    [data, category]
   );
   return (
     <>
       <PageHeader eyebrow="Commitments" title="Todos" description="把原生任务与聊天承诺放进同一个、可解释的优先级队列。" />
-      <div className="filter-bar" role="group" aria-label="Todo 方向筛选">
+      <div className="filter-bar" role="group" aria-label="Todo 分类筛选">
         {[
-          ["all", "全部"],
+          ["active", "全部未完成"],
           ["owed_by_me", "我来处理"],
           ["waiting_on_them", "等待对方"],
-          ["shared", "共同推进"]
+          ["shared", "共同推进"],
+          ["done", "已完成"]
         ].map(([value, label]) => (
-          <button key={value} className={direction === value ? "active" : ""} onClick={() => setDirection(value)}>{label}</button>
+          <button key={value} className={category === value ? "active" : ""} onClick={() => setCategory(value)}>{label}</button>
         ))}
       </div>
       <ErrorBanner message={error} />
       <Section title={`${filtered.length} 个事项`} subtitle="优先级原因始终可见">
-        {filtered.length ? <div className="list-stack">{filtered.sort((a, b) => b.data.priority.effective - a.data.priority.effective).map(({ data: todo }) => <TodoRow key={todo.id} todo={todo} />)}</div> : <EmptyState icon={ListTodo} title={loading ? "正在加载…" : "没有匹配的 Todo"} description="更换筛选条件或同步新的工作上下文。" />}
+        {filtered.length ? <div className="list-stack">{filtered.sort((a, b) => b.data.priority.effective - a.data.priority.effective).map(({ data: todo }) => <TodoRow key={todo.id} todo={todo} onStatusChanged={reload} />)}</div> : <EmptyState icon={ListTodo} title={loading ? "正在加载…" : "没有匹配的 Todo"} description="更换筛选条件或同步新的工作上下文。" />}
       </Section>
     </>
   );
@@ -866,7 +930,33 @@ function SettingsPage() {
   const [syncing, setSyncing] = useState(false);
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
+  const [leaderQuery, setLeaderQuery] = useState("");
+  const [updatingLeader, setUpdatingLeader] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const configuredLeaderIds = new Set(
+    config.data.leaders.map((leader) => leader.person_id)
+  );
+  const peopleById = new Map(
+    people.data.map(({ data: person }) => [person.id, person])
+  );
+  const normalizedLeaderQuery = leaderQuery.trim().toLocaleLowerCase();
+  const leaderSearchResults = normalizedLeaderQuery
+    ? people.data
+        .map(({ data: person }) => person)
+        .filter((person) => !configuredLeaderIds.has(person.id))
+        .filter((person) =>
+          [
+            person.title,
+            person.role ?? "",
+            ...person.identities.map(
+              (identity) => identity.display_name ?? identity.external_id
+            )
+          ].some((value) =>
+            value.toLocaleLowerCase().includes(normalizedLeaderQuery)
+          )
+        )
+        .slice(0, 8)
+    : [];
   useEffect(() => {
     if (!syncing && !liveStatus.running) return;
     void reloadSyncStatus();
@@ -898,14 +988,25 @@ function SettingsPage() {
     }
   }
 
-  async function toggleLeader(person: PersonMetadata) {
+  async function updateLeader(person: PersonMetadata, add: boolean) {
+    setUpdatingLeader(person.id);
+    setMessage("");
     const current = config.data.leaders;
-    const exists = current.some((leader) => leader.person_id === person.id);
-    const next = exists
-      ? current.filter((leader) => leader.person_id !== person.id)
-      : [...current, { person_id: person.id, boost: person.leader_boost || 20 }];
-    await api("/api/config/leaders", { method: "PUT", body: JSON.stringify(next) });
-    await Promise.all([config.reload(), people.reload()]);
+    const next = add
+      ? [...current, { person_id: person.id, boost: person.leader_boost || 20 }]
+      : current.filter((leader) => leader.person_id !== person.id);
+    try {
+      await api("/api/config/leaders", {
+        method: "PUT",
+        body: JSON.stringify(next)
+      });
+      await config.reload();
+      if (add) setLeaderQuery("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUpdatingLeader(null);
+    }
   }
 
   async function switchProvider(provider: string) {
@@ -1093,18 +1194,73 @@ function SettingsPage() {
         </Section>
 
         <Section title="Priority people" subtitle="只有你能指定 Leader">
-          <div className="leader-list">
-            {people.data.map(({ data: person }) => {
-              const active = config.data.leaders.some((leader) => leader.person_id === person.id);
-              return (
-                <button className={`leader-row ${active ? "selected" : ""}`} key={person.id} onClick={() => void toggleLeader(person)}>
-                  <span className="person-avatar small">{person.title.slice(0, 1)}</span>
-                  <span><strong>{person.title}</strong><small>{person.role ?? "角色待补充"}</small></span>
-                  <span className="leader-toggle">{active ? <Check size={15} /> : null}</span>
-                </button>
-              );
-            })}
-            {!people.data.length && <EmptyState icon={Users} title="没有可配置人物" description="同步上下文后即可指定 Leader。" />}
+          <div className="priority-people">
+            <label className="people-search">
+              <Search size={15} />
+              <input
+                aria-label="搜索 Priority people"
+                onChange={(event) => setLeaderQuery(event.target.value)}
+                placeholder="搜索姓名或角色后添加"
+                type="search"
+                value={leaderQuery}
+              />
+            </label>
+            {normalizedLeaderQuery && (
+              <div className="leader-search-results">
+                {leaderSearchResults.map((person) => (
+                  <button
+                    disabled={updatingLeader === person.id}
+                    key={person.id}
+                    onClick={() => void updateLeader(person, true)}
+                    type="button"
+                  >
+                    <span className="person-avatar small">{person.title.slice(0, 1)}</span>
+                    <span>
+                      <strong>{person.title}</strong>
+                      <small>{person.role ?? "角色待补充"}</small>
+                    </span>
+                    <span className="leader-action"><Plus size={14} />添加</span>
+                  </button>
+                ))}
+                {!leaderSearchResults.length && (
+                  <span className="leader-search-empty">没有匹配的未添加人物</span>
+                )}
+              </div>
+            )}
+            <div className="configured-leaders">
+              <span className="configured-leaders-title">
+                已添加 · {config.data.leaders.length}
+              </span>
+              <div className="leader-list">
+                {config.data.leaders.map((leader) => {
+                  const person = peopleById.get(leader.person_id);
+                  const title = person?.title ?? leader.person_id;
+                  return (
+                    <div className="leader-row selected" key={leader.person_id}>
+                      <span className="person-avatar small">{title.slice(0, 1)}</span>
+                      <span>
+                        <strong>{title}</strong>
+                        <small>{person?.role ?? `优先级加权 +${leader.boost}`}</small>
+                      </span>
+                      <button
+                        aria-label={`移除 ${title}`}
+                        className="leader-remove"
+                        disabled={!person || updatingLeader === leader.person_id}
+                        onClick={() => person && void updateLeader(person, false)}
+                        title={person ? "移除" : "人物资料缺失，请在配置文件中处理"}
+                        type="button"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+                {!config.data.leaders.length && (
+                  <span className="leader-search-empty">尚未添加 Priority people</span>
+                )}
+              </div>
+            </div>
+            {!people.data.length && <p className="muted-copy">同步上下文后即可搜索并添加人物。</p>}
           </div>
         </Section>
 
@@ -1146,7 +1302,8 @@ function SearchPage() {
 
 function DocumentPage() {
   const { id = "" } = useParams();
-  const endpoint = `/api/documents/${encodeURIComponent(id)}`;
+  const [provenancePage, setProvenancePage] = useState(1);
+  const endpoint = `/api/documents/${encodeURIComponent(id)}?provenance_page=${provenancePage}&provenance_page_size=10`;
   const resource = useApi<ApiDocument | null>(endpoint, null);
   const [editing, setEditing] = useState(false);
   const [body, setBody] = useState("");
@@ -1268,20 +1425,6 @@ function DocumentPage() {
                         <li key={evidence}>{evidence}</li>
                       ))}
                     </ul>
-                    <div className="observation-sources">
-                      {(observation.source_refs ?? []).map((reference) => (
-                        document.provenanceSources?.find(
-                          (source) => source.id === reference
-                        ) ? (
-                          <ProvenanceSource
-                            key={reference}
-                            source={document.provenanceSources.find(
-                              (source) => source.id === reference
-                            )!}
-                          />
-                        ) : <code key={reference}>{reference}</code>
-                      ))}
-                    </div>
                   </article>
                 ))}
                 {!person.observations.length && (
@@ -1292,16 +1435,44 @@ function DocumentPage() {
           )}
           <Section title="Provenance">
             <div className="source-refs">
-              {document.data.source_refs.map((reference) => {
-                const source = document.provenanceSources?.find(
-                  (candidate) => candidate.id === reference
-                );
-                return source
-                  ? <ProvenanceSource key={reference} source={source} />
-                  : <code key={reference}>{reference}</code>;
-              })}
-              {!document.data.source_refs.length && <span className="muted-copy">Manual or baseline document</span>}
+              {person
+                ? document.provenanceSources?.map((source) => (
+                    <ProvenanceSource key={source.id} source={source} />
+                  ))
+                : document.data.source_refs.map((reference) => (
+                    <code key={reference}>{reference}</code>
+                  ))}
+              {person && !document.provenanceSources?.length && (
+                <span className="muted-copy">没有可解析的来源消息</span>
+              )}
+              {!person && !document.data.source_refs.length && (
+                <span className="muted-copy">Manual or baseline document</span>
+              )}
             </div>
+            {person && document.provenancePagination && document.provenancePagination.total_pages > 1 && (
+              <div className="provenance-pagination">
+                <button
+                  aria-label="上一页 Provenance"
+                  disabled={document.provenancePagination.page <= 1}
+                  onClick={() => setProvenancePage(document.provenancePagination!.page - 1)}
+                  type="button"
+                >
+                  <ChevronLeft size={14} />上一页
+                </button>
+                <span>
+                  第 {document.provenancePagination.page} / {document.provenancePagination.total_pages} 页
+                  · 共 {document.provenancePagination.total} 条
+                </span>
+                <button
+                  aria-label="下一页 Provenance"
+                  disabled={document.provenancePagination.page >= document.provenancePagination.total_pages}
+                  onClick={() => setProvenancePage(document.provenancePagination!.page + 1)}
+                  type="button"
+                >
+                  下一页<ChevronRight size={14} />
+                </button>
+              </div>
+            )}
             {typeof document.data.confidence === "number" && <div className="confidence"><span>Confidence</span><strong>{Math.round(document.data.confidence * 100)}%</strong></div>}
             {document.data.analysis && (
               <div className="meta-list">

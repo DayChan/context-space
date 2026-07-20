@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  LeaderConfig,
   Overview,
   PersonMetadata,
   SyncStatus,
@@ -93,6 +94,34 @@ const personWithInsight: PersonMetadata = {
   last_interaction_at: "2026-07-20T02:00:00Z"
 };
 
+const personProvenanceSources = Array.from({ length: 11 }, (_, index) => {
+  if (index === 0) {
+    return {
+      id: "lark:message:person_2",
+      title: "Alice",
+      body: "# Alice\n\n**Occurred:** 2026-07-20T02:00:00Z\n\nAlice 会在评审前汇总阻塞项",
+      occurred_at: "2026-07-20T02:00:00Z",
+      source_kind: "p2p"
+    };
+  }
+  if (index === 1) {
+    return {
+      id: "lark:message:person_1",
+      title: "发布评审群",
+      body: "# 发布评审群\n\n**Occurred:** 2026-07-20T01:30:00Z\n\nAlice 负责发布流程",
+      occurred_at: "2026-07-20T01:30:00Z",
+      source_kind: "mention"
+    };
+  }
+  return {
+    id: `lark:message:person_extra_${index}`,
+    title: `历史讨论 ${index}`,
+    body: `# 历史讨论 ${index}\n\n第 ${index} 条历史消息`,
+    occurred_at: `2026-07-${String(20 - index).padStart(2, "0")}T00:00:00Z`,
+    source_kind: "p2p"
+  };
+});
+
 const overview: Overview = {
   topTodos: [owedTodo],
   upcomingCalendar: [],
@@ -122,10 +151,17 @@ let selectedProvider = "codex-sdk";
 let selectedModel: string | null = null;
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
 let owedTodoStatus: TodoMetadata["status"] = "open";
+let configuredLeaders: LeaderConfig[] = [];
+let inboxCandidates: Array<{
+  path: string;
+  data: TodoMetadata;
+  body: string;
+  etag: string;
+}> = [];
 
 function configResponse() {
   return {
-    leaders: [],
+    leaders: configuredLeaders,
     lark: { status: larkStatus, readOnly: true, identity: "user" },
     loop: { enabled: false, executionEndpoint: null },
     analysis: {
@@ -177,6 +213,21 @@ beforeEach(() => {
   selectedModel = null;
   larkStatus = EMPTY_SYNC_STATUS;
   owedTodoStatus = "open";
+  configuredLeaders = [];
+  inboxCandidates = [
+    {
+      path: "inbox/todo-candidates/candidate_frontend.md",
+      data: {
+        ...owedTodo,
+        id: "candidate_frontend",
+        title: "确认上线检查项",
+        type: "candidate",
+        status: "candidate"
+      },
+      body: "# 确认上线检查项\n\n需要人工确认后进入 Todo。",
+      etag: "candidate-etag"
+    }
+  ];
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -190,6 +241,27 @@ beforeEach(() => {
         if ("model" in body) selectedModel = body.model ?? null;
         return jsonResponse({
           config: { provider: selectedProvider, model: selectedModel }
+        });
+      }
+      if (url === "/api/config/leaders") {
+        configuredLeaders = JSON.parse(
+          String(init?.body ?? "[]")
+        ) as LeaderConfig[];
+        return jsonResponse(configuredLeaders);
+      }
+      if (url.startsWith("/api/inbox/") && url.endsWith("/confirm")) {
+        const id = decodeURIComponent(url.split("/")[3]);
+        const confirmed = inboxCandidates.find(
+          (candidate) => candidate.data.id === id
+        );
+        inboxCandidates = inboxCandidates.filter(
+          (candidate) => candidate.data.id !== id
+        );
+        return jsonResponse({
+          ...confirmed,
+          data: confirmed
+            ? { ...confirmed.data, type: "todo", status: "open" }
+            : null
         });
       }
       if (url === "/api/sync/lark/status") return jsonResponse(larkStatus);
@@ -214,6 +286,19 @@ beforeEach(() => {
           { path: "todos/waiting.md", data: waitingTodo, body: "", etag: "2" }
         ]);
       }
+      if (url.startsWith("/api/documents?type=candidate")) {
+        return jsonResponse(inboxCandidates);
+      }
+      if (url.startsWith("/api/documents?type=person")) {
+        return jsonResponse([
+          {
+            path: "people/person_alice.md",
+            data: personWithInsight,
+            body: "# Alice",
+            etag: "person-etag"
+          }
+        ]);
+      }
       if (url.startsWith("/api/loop")) {
         return jsonResponse({
           enabled: false,
@@ -230,6 +315,12 @@ beforeEach(() => {
         });
       }
       if (url.startsWith("/api/documents/person_alice")) {
+        const parsed = new URL(url, "http://context-space.local");
+        const page = Number(parsed.searchParams.get("provenance_page") ?? "1");
+        const pageSize = Number(
+          parsed.searchParams.get("provenance_page_size") ?? "10"
+        );
+        const pageStart = (page - 1) * pageSize;
         return jsonResponse({
           path: "people/person_alice.md",
           data: personWithInsight,
@@ -240,22 +331,16 @@ beforeEach(() => {
             waitingOnThem: [],
             shared: []
           },
-          provenanceSources: [
-            {
-              id: "lark:message:person_1",
-              title: "发布评审群",
-              body: "# 发布评审群\n\n**Occurred:** 2026-07-20T01:30:00Z\n\nAlice 负责发布流程",
-              occurred_at: "2026-07-20T01:30:00Z",
-              source_kind: "mention"
-            },
-            {
-              id: "lark:message:person_2",
-              title: "Alice",
-              body: "# Alice\n\n**Occurred:** 2026-07-20T02:00:00Z\n\nAlice 会在评审前汇总阻塞项",
-              occurred_at: "2026-07-20T02:00:00Z",
-              source_kind: "p2p"
-            }
-          ]
+          provenanceSources: personProvenanceSources.slice(
+            pageStart,
+            pageStart + pageSize
+          ),
+          provenancePagination: {
+            page,
+            page_size: pageSize,
+            total: personProvenanceSources.length,
+            total_pages: Math.ceil(personProvenanceSources.length / pageSize)
+          }
         });
       }
       return jsonResponse([]);
@@ -283,17 +368,41 @@ describe("Context Space workbench", () => {
     expect(screen.getByText("等待 Alice 评审")).toBeInTheDocument();
   });
 
+  it("confirms an Inbox candidate and removes it from the review queue", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/inbox"]}><AppView /></MemoryRouter>);
+    expect(await screen.findByText("确认上线检查项")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "确认 确认上线检查项" })
+    );
+    expect(await screen.findByText("Inbox 已清空")).toBeInTheDocument();
+    expect(screen.queryByText("确认上线检查项")).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/inbox/candidate_frontend/confirm",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ etag: "candidate-etag" })
+      })
+    );
+  });
+
   it("marks a Todo complete from the list", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/todos"]}><AppView /></MemoryRouter>);
     const toggle = await screen.findByRole("button", { name: "标记完成 准备发布计划" });
     await user.click(toggle);
-    expect(await screen.findByRole("button", { name: "重新打开 准备发布计划" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("准备发布计划")).not.toBeInTheDocument();
+    });
     expect(owedTodoStatus).toBe("done");
     expect(fetch).toHaveBeenCalledWith(
       "/api/todos/todo_owed/status",
       expect.objectContaining({ method: "PATCH" })
     );
+    await user.click(screen.getByRole("button", { name: "已完成" }));
+    expect(await screen.findByRole("button", { name: "重新打开 准备发布计划" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "我来处理" }));
+    expect(screen.queryByText("准备发布计划")).not.toBeInTheDocument();
   });
 
   it("shows provenance and disabled automation on Todo detail", async () => {
@@ -306,6 +415,7 @@ describe("Context Space workbench", () => {
   });
 
   it("shows categorized, evidence-backed person observations", async () => {
+    const user = userEvent.setup();
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/documents/person_alice"]}><AppView /></MemoryRouter>);
     expect(await screen.findByText("职场观察")).toBeInTheDocument();
     expect(screen.getByText("协作方式")).toBeInTheDocument();
@@ -314,6 +424,11 @@ describe("Context Space workbench", () => {
     expect(screen.getByText(/86%/)).toBeInTheDocument();
     expect(screen.getAllByText("发布评审群").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Alice 负责发布流程").length).toBeGreaterThan(0);
+    expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "下一页 Provenance" }));
+    expect(await screen.findByText("历史讨论 10")).toBeInTheDocument();
+    expect(screen.queryByText("发布评审群")).not.toBeInTheDocument();
+    expect(screen.getByText(/第 2 \/ 2 页/)).toBeInTheDocument();
   });
 
   it("shows the current synchronization activity", async () => {
@@ -363,6 +478,28 @@ describe("Context Space workbench", () => {
       "/api/config/analysis",
       expect.objectContaining({ method: "PUT" })
     );
+  });
+
+  it("searches, adds, lists, and removes Priority people", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+
+    const search = await screen.findByLabelText("搜索 Priority people");
+    expect(screen.getByText("尚未添加 Priority people")).toBeInTheDocument();
+    expect(screen.queryByText("Alice")).not.toBeInTheDocument();
+
+    await user.type(search, "Ali");
+    await user.click(await screen.findByRole("button", { name: /Alice.*添加/ }));
+    expect(await screen.findByText("已添加 · 1")).toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(configuredLeaders).toEqual([
+      { person_id: "person_alice", boost: 20 }
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "移除 Alice" }));
+    expect(await screen.findByText("已添加 · 0")).toBeInTheDocument();
+    expect(screen.queryByText("Alice")).not.toBeInTheDocument();
+    expect(configuredLeaders).toEqual([]);
   });
 
   it("saves and clears the model override for future analysis", async () => {

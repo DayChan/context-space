@@ -9,7 +9,11 @@ import type {
 } from "../src/analysis/contracts";
 import type { CommandRunner } from "../src/adapters/lark/runner";
 import { createTodoMetadata } from "../src/core/todo";
-import type { PersonMetadata, SourceMetadata } from "../src/core/types";
+import type {
+  KnowledgeMetadata,
+  PersonMetadata,
+  SourceMetadata
+} from "../src/core/types";
 import {
   createConfiguredLogger,
   type Logger,
@@ -139,6 +143,80 @@ describe("local API", () => {
       .expect(400);
   });
 
+  it("confirms Todo and knowledge candidates into canonical collections", async () => {
+    const todo = createTodoMetadata({
+      id: "candidate_todo_api",
+      title: "确认发布计划",
+      type: "candidate",
+      status: "candidate",
+      managed: "hybrid"
+    });
+    const timestamp = "2026-07-20T00:00:00.000Z";
+    const knowledge: KnowledgeMetadata = {
+      schema: "work-context/knowledge@1",
+      id: "candidate_knowledge_api",
+      type: "candidate",
+      title: "发布决策",
+      managed: "generated",
+      created_at: timestamp,
+      updated_at: timestamp,
+      source_refs: ["lark:message:decision"],
+      confidence: 0.8,
+      status: "draft",
+      knowledge_kind: "decision",
+      curation_state: "draft",
+      superseded_by: null,
+      tags: ["release"]
+    };
+    await context.runtime.store.write(
+      "inbox/todo-candidates/candidate_todo_api.md",
+      todo,
+      "# 确认发布计划"
+    );
+    await context.runtime.store.write(
+      "inbox/knowledge-candidates/candidate_knowledge_api.md",
+      knowledge,
+      "# 发布决策"
+    );
+    await context.runtime.index.rebuild(context.runtime.store);
+
+    const todoResponse = await request(context.app)
+      .post("/api/inbox/candidate_todo_api/confirm")
+      .send({ etag: context.runtime.index.byId(todo.id)!.etag })
+      .expect(200);
+    expect(todoResponse.body.data).toMatchObject({
+      type: "todo",
+      status: "open",
+      managed: "hybrid"
+    });
+    expect(
+      await context.runtime.store.exists(
+        "inbox/todo-candidates/candidate_todo_api.md"
+      )
+    ).toBe(false);
+    expect(
+      await context.runtime.store.exists("todos/items/candidate_todo_api.md")
+    ).toBe(true);
+
+    const knowledgeResponse = await request(context.app)
+      .post("/api/inbox/candidate_knowledge_api/confirm")
+      .send({ etag: context.runtime.index.byId(knowledge.id)!.etag })
+      .expect(200);
+    expect(knowledgeResponse.body.data).toMatchObject({
+      type: "knowledge",
+      status: "curated",
+      curation_state: "curated",
+      managed: "hybrid"
+    });
+    expect(
+      await context.runtime.store.exists(
+        "knowledge/decisions/candidate_knowledge_api.md"
+      )
+    ).toBe(true);
+    expect(context.runtime.index.byId(todo.id)?.data.type).toBe("todo");
+    expect(context.runtime.index.byId(knowledge.id)?.data.type).toBe("knowledge");
+  });
+
   it("resolves concrete provenance messages for People", async () => {
     const timestamp = "2026-07-20T00:00:00.000Z";
     const source: SourceMetadata = {
@@ -157,6 +235,13 @@ describe("local API", () => {
       participants: [],
       provider_metadata: {}
     };
+    const newerSource: SourceMetadata = {
+      ...source,
+      id: "lark:message:person_api_newer",
+      title: "后续讨论",
+      source_id: "lark:message:person_api_newer",
+      occurred_at: "2026-07-20T01:00:00.000Z"
+    };
     const person: PersonMetadata = {
       schema: "work-context/person@1",
       id: "person_api",
@@ -165,7 +250,7 @@ describe("local API", () => {
       managed: "hybrid",
       created_at: timestamp,
       updated_at: timestamp,
-      source_refs: [source.id],
+      source_refs: [source.id, newerSource.id],
       identities: [],
       role: null,
       role_origin: null,
@@ -179,13 +264,44 @@ describe("local API", () => {
       source,
       "# 发布讨论\n\nAlice 会在评审前汇总阻塞项"
     );
+    await context.runtime.store.write(
+      "sources/lark/dms/alice/person_api_newer.md",
+      newerSource,
+      "# 后续讨论\n\nAlice 确认了新的排期"
+    );
     await context.runtime.store.write("people/person_api.md", person, "# Alice");
     await context.runtime.index.rebuild(context.runtime.store);
 
-    const response = await request(context.app)
-      .get("/api/documents/person_api")
+    const list = await request(context.app)
+      .get("/api/documents?type=person")
       .expect(200);
-    expect(response.body.provenanceSources).toEqual([
+    expect(
+      list.body.find(
+        (entry: { data: { id: string } }) => entry.data.id === person.id
+      ).provenanceSources
+    ).toBeUndefined();
+
+    const firstPage = await request(context.app)
+      .get("/api/documents/person_api?provenance_page=1&provenance_page_size=1")
+      .expect(200);
+    expect(firstPage.body.provenancePagination).toEqual({
+      page: 1,
+      page_size: 1,
+      total: 2,
+      total_pages: 2
+    });
+    expect(firstPage.body.provenanceSources).toEqual([
+      expect.objectContaining({
+        id: newerSource.id,
+        title: "后续讨论",
+        body: expect.stringContaining("新的排期")
+      })
+    ]);
+
+    const secondPage = await request(context.app)
+      .get("/api/documents/person_api?provenance_page=2&provenance_page_size=1")
+      .expect(200);
+    expect(secondPage.body.provenanceSources).toEqual([
       expect.objectContaining({
         id: source.id,
         title: "发布讨论",

@@ -119,6 +119,33 @@ export class MarkdownStore {
     };
   }
 
+  async move<T extends BaseMetadata>(
+    fromPath: string,
+    toPath: string,
+    options: Pick<WriteOptions, "expectedEtag"> = {}
+  ): Promise<WorkspaceDocument<T>> {
+    if (!fromPath.endsWith(".md") || !toPath.endsWith(".md")) {
+      throw new InvalidDocumentError("Canonical documents must use the .md extension");
+    }
+    const current = await this.read<T>(fromPath);
+    if (
+      options.expectedEtag !== undefined &&
+      current.etag !== options.expectedEtag
+    ) {
+      throw new DocumentConflictError(`Document changed since it was loaded: ${fromPath}`);
+    }
+    if (await this.exists(toPath)) {
+      throw new DocumentConflictError(`Document already exists: ${toPath}`);
+    }
+    const destination = this.resolve(toPath);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await rename(this.resolve(fromPath), destination);
+    return {
+      ...current,
+      path: toPath.replaceAll(path.sep, "/")
+    };
+  }
+
   private validateMetadata(value: Record<string, unknown>): asserts value is BaseMetadata {
     const required = ["schema", "id", "type", "title", "managed", "created_at", "updated_at", "source_refs"];
     for (const field of required) {

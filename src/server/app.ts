@@ -29,6 +29,7 @@ import {
 import { calculatePriority } from "../core/todo";
 import type {
   BaseMetadata,
+  KnowledgeMetadata,
   LeaderConfig,
   PersonMetadata,
   SourceMetadata,
@@ -62,6 +63,17 @@ const todoStatusSchema = z
     status: z.enum(["open", "done"])
   })
   .strict();
+
+const confirmCandidateSchema = z
+  .object({
+    etag: z.string().min(1)
+  })
+  .strict();
+
+const provenancePaginationSchema = z.object({
+  provenance_page: z.coerce.number().int().min(1).default(1),
+  provenance_page_size: z.coerce.number().int().min(1).max(50).default(10)
+});
 
 const reanalysisRangeSchema = z
   .object({
@@ -107,6 +119,10 @@ function isPerson(document: WorkspaceDocument): document is WorkspaceDocument<Pe
   return document.data.type === "person";
 }
 
+function safeDocumentSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 140);
+}
+
 function safeRequestId(value: string | undefined): string {
   return value && /^[A-Za-z0-9._:-]{1,128}$/.test(value)
     ? value
@@ -134,7 +150,12 @@ function errorStatus(error: unknown): number {
 async function apiDocument(
   document: WorkspaceDocument,
   runtime: Runtime,
-  leaders: LeaderConfig[]
+  leaders: LeaderConfig[],
+  options: {
+    includePersonProvenance?: boolean;
+    provenancePage?: number;
+    provenancePageSize?: number;
+  } = {}
 ): Promise<unknown> {
   if (isTodo(document)) {
     return {
@@ -148,27 +169,50 @@ async function apiDocument(
   if (isPerson(document)) {
     const todos = runtime.index.all<TodoMetadata>().filter(isTodo);
     const relationships = commitmentsForPerson(document.data.id, todos);
-    const sourceReferences = new Set([
-      ...document.data.source_refs,
-      ...document.data.observations.flatMap(
-        (observation) => observation.source_refs ?? []
-      )
-    ]);
-    const provenanceSources = [...sourceReferences].flatMap((reference) => {
-      const source = runtime.index.byId<SourceMetadata>(reference);
-      if (!source || source.data.type !== "source") return [];
-      return [{
+    const page = options.provenancePage ?? 1;
+    const pageSize = options.provenancePageSize ?? 10;
+    const resolvedSources = options.includePersonProvenance
+      ? [...new Set([
+          ...document.data.source_refs,
+          ...document.data.observations.flatMap(
+            (observation) => observation.source_refs ?? []
+          )
+        ])]
+          .flatMap((reference) => {
+            const source = runtime.index.byId<SourceMetadata>(reference);
+            return source?.data.type === "source" ? [source] : [];
+          })
+          .sort((left, right) =>
+            right.data.occurred_at.localeCompare(left.data.occurred_at)
+          )
+      : [];
+    const total = resolvedSources.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const normalizedPage = Math.min(page, totalPages);
+    const pageStart = (normalizedPage - 1) * pageSize;
+    const provenanceSources = resolvedSources
+      .slice(pageStart, pageStart + pageSize)
+      .map((source) => ({
         id: source.data.id,
         title: source.data.title,
         body: source.body,
         occurred_at: source.data.occurred_at,
         source_kind: source.data.source_kind
-      }];
-    });
+      }));
     return {
       ...document,
       data: applyLeaderConfiguration(document.data, leaders),
-      provenanceSources,
+      ...(options.includePersonProvenance
+        ? {
+            provenanceSources,
+            provenancePagination: {
+              page: normalizedPage,
+              page_size: pageSize,
+              total,
+              total_pages: totalPages
+            }
+          }
+        : {}),
       relationships: {
         owedByMe: relationships.owedByMe.map(({ data }) => data),
         waitingOnThem: relationships.waitingOnThem.map(({ data }) => data),
@@ -321,7 +365,17 @@ export async function createApp(options: CreateAppOptions): Promise<{
       response.status(404).json({ error: "Document not found" });
       return;
     }
-    response.json(await apiDocument(document, runtime, await runtime.getLeaders()));
+    const provenancePagination = provenancePaginationSchema.parse(request.query);
+    response.json(await apiDocument(
+      document,
+      runtime,
+      await runtime.getLeaders(),
+      {
+        includePersonProvenance: document.data.type === "person",
+        provenancePage: provenancePagination.provenance_page,
+        provenancePageSize: provenancePagination.provenance_page_size
+      }
+    ));
   });
 
   app.put("/api/documents/:id", async (request, response) => {
@@ -371,6 +425,81 @@ export async function createApp(options: CreateAppOptions): Promise<{
     });
     await index.rebuild(store);
     response.json(await apiDocument(saved, runtime, await runtime.getLeaders()));
+  });
+
+  app.post("/api/inbox/:id/confirm", async (request, response) => {
+    const input = confirmCandidateSchema.parse(request.body);
+    const existing = index.byId(request.params.id);
+    if (!existing || existing.data.type !== "candidate") {
+      response.status(404).json({ error: "Inbox candidate not found" });
+      return;
+    }
+    if (existing.etag !== input.etag) {
+      throw new DocumentConflictError(
+        `Document changed since it was loaded: ${existing.path}`
+      );
+    }
+
+    let targetPath: string;
+    let confirmed: TodoMetadata | KnowledgeMetadata;
+    if (
+      "direction" in existing.data &&
+      "automation" in existing.data
+    ) {
+      const candidate = existing.data as TodoMetadata;
+      targetPath = `todos/items/${safeDocumentSegment(candidate.id)}.md`;
+      confirmed = {
+        ...candidate,
+        type: "todo",
+        status: "open",
+        managed: "hybrid",
+        updated_at: nowIso()
+      };
+    } else if (
+      "knowledge_kind" in existing.data &&
+      "curation_state" in existing.data
+    ) {
+      const candidate = existing.data as KnowledgeMetadata;
+      const directories: Record<KnowledgeMetadata["knowledge_kind"], string> = {
+        project: "projects",
+        decision: "decisions",
+        playbook: "playbooks",
+        concept: "concepts",
+        glossary: "glossary",
+        draft: "drafts"
+      };
+      targetPath = `knowledge/${directories[candidate.knowledge_kind]}/${safeDocumentSegment(candidate.id)}.md`;
+      confirmed = {
+        ...candidate,
+        type: "knowledge",
+        status: "curated",
+        curation_state: "curated",
+        managed: "hybrid",
+        updated_at: nowIso()
+      };
+    } else {
+      response.status(400).json({ error: "Unsupported Inbox candidate" });
+      return;
+    }
+
+    if (await store.exists(targetPath)) {
+      throw new DocumentConflictError(`Document already exists: ${targetPath}`);
+    }
+    const updated = await store.write(
+      existing.path,
+      confirmed,
+      existing.body,
+      { expectedEtag: input.etag }
+    );
+    const moved = await store.move(existing.path, targetPath, {
+      expectedEtag: updated.etag
+    });
+    await index.rebuild(store);
+    response.json(await apiDocument(
+      moved,
+      runtime,
+      await runtime.getLeaders()
+    ));
   });
 
   app.get("/api/search", (request, response) => {
