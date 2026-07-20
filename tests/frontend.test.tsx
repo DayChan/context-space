@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Overview, TodoMetadata } from "../src/core/types";
+import type { Overview, SyncStatus, TodoMetadata } from "../src/core/types";
 import { DEFAULT_AUTOMATION, EMPTY_SYNC_STATUS } from "../src/core/types";
 import { AppView } from "../src/web/App";
 
@@ -78,11 +78,12 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 }
 
 let selectedProvider = "codex-sdk";
+let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
 
 function configResponse() {
   return {
     leaders: [],
-    lark: { status: EMPTY_SYNC_STATUS, readOnly: true, identity: "user" },
+    lark: { status: larkStatus, readOnly: true, identity: "user" },
     loop: { enabled: false, executionEndpoint: null },
     analysis: {
       current_provider: selectedProvider,
@@ -128,6 +129,7 @@ function configResponse() {
 beforeEach(() => {
   vi.restoreAllMocks();
   selectedProvider = "codex-sdk";
+  larkStatus = EMPTY_SYNC_STATUS;
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -137,6 +139,7 @@ beforeEach(() => {
         if (body.provider) selectedProvider = body.provider;
         return jsonResponse({ config: { provider: selectedProvider } });
       }
+      if (url === "/api/sync/lark") return jsonResponse(larkStatus);
       if (url === "/api/config") return jsonResponse(configResponse());
       if (url.startsWith("/api/overview")) return jsonResponse(overview);
       if (url.startsWith("/api/documents?type=todo")) {
@@ -216,5 +219,64 @@ describe("Context Space workbench", () => {
       "/api/config/analysis",
       expect.objectContaining({ method: "PUT" })
     );
+  });
+
+  it("shows actionable Lark permission and CLI update reminders", async () => {
+    larkStatus = {
+      running: false,
+      started_at: "2026-07-20T01:00:00Z",
+      completed_at: "2026-07-20T01:01:00Z",
+      last_error: "飞书同步需要人工处理",
+      results: [
+        {
+          source: "mentions",
+          ok: false,
+          received: 0,
+          persisted: 0,
+          error: "飞书权限不足（99991679）：missing scope",
+          issue: {
+            kind: "permission",
+            requires_action: true,
+            message: "missing scope",
+            code: 99991679,
+            missing_scopes: ["im:message:readonly"],
+            hint: "lark-cli auth login --scope \"im:message:readonly\"",
+            console_url: "https://open.feishu.cn/app/permission",
+            troubleshooter: "排查建议：https://open.feishu.cn/search?code=99991679",
+            update: {
+              command: "lark-cli update",
+              current: "1.0.50",
+              latest: "1.0.72"
+            }
+          }
+        }
+      ]
+    };
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+        initialEntries={["/settings"]}
+      >
+        <AppView />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(/需要处理飞书权限/)).toBeInTheDocument();
+    expect(screen.getByText("im:message:readonly")).toBeInTheDocument();
+    expect(screen.getByText("lark-cli update")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /打开飞书权限配置/ })).toHaveAttribute(
+      "href",
+      "https://open.feishu.cn/app/permission"
+    );
+    expect(screen.getByRole("link", { name: /查看飞书排查建议/ })).toHaveAttribute(
+      "href",
+      "https://open.feishu.cn/search?code=99991679"
+    );
+
+    await user.click(screen.getByRole("button", { name: "立即只读同步" }));
+    expect(
+      await screen.findByText("同步已完成，但存在需要处理的飞书权限或认证问题，请查看下方提醒。")
+    ).toBeInTheDocument();
   });
 });

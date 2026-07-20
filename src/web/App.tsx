@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   ArrowUpRight,
   BookOpen,
   Bot,
@@ -115,6 +116,25 @@ function statusLabel(status: string | undefined): string {
     draft: "草稿"
   };
   return status ? labels[status] ?? status : "—";
+}
+
+const larkSourceLabels: Record<SyncStatus["results"][number]["source"], string> = {
+  self: "当前用户",
+  mentions: "群聊提及",
+  p2p: "P2P 消息",
+  calendar: "日历",
+  tasks: "任务"
+};
+
+function safeExternalUrl(value: string | undefined): string | null {
+  const candidate = value?.match(/https?:\/\/[^\s]+/)?.[0]?.replace(/[),，。]+$/, "");
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function usePageTitle(): string {
@@ -236,6 +256,70 @@ function PageHeader({
 
 function ErrorBanner({ message }: { message: string | null }) {
   return message ? <div className="error-banner">{message}</div> : null;
+}
+
+function LarkSyncIssues({ status }: { status: SyncStatus }) {
+  const failed = status.results.filter((result) => !result.ok);
+  if (!failed.length) return null;
+  return (
+    <div className="lark-issue-list" aria-label="飞书同步问题">
+      {failed.map((result) => {
+        const issue = result.issue;
+        const consoleUrl = safeExternalUrl(issue?.console_url);
+        const troubleshooter = safeExternalUrl(issue?.troubleshooter);
+        const title =
+          issue?.kind === "permission"
+            ? "需要处理飞书权限"
+            : issue?.kind === "authentication"
+              ? "需要重新认证飞书"
+              : issue?.kind === "invalid_parameters"
+                ? "飞书请求参数错误"
+                : "来源同步失败";
+        return (
+          <div
+            className={`lark-issue ${issue?.requires_action ? "requires-action" : ""}`}
+            key={result.source}
+          >
+            <div className="lark-issue-head">
+              <AlertTriangle size={16} />
+              <div>
+                <strong>{larkSourceLabels[result.source]} · {title}</strong>
+                <span>{result.error ?? issue?.message ?? "未知错误"}</span>
+              </div>
+              <Badge tone={issue?.requires_action ? "amber" : "coral"}>
+                {issue?.requires_action ? "需要处理" : "失败"}
+              </Badge>
+            </div>
+            {issue?.missing_scopes?.length ? (
+              <p>缺失 scope：<code>{issue.missing_scopes.join(" / ")}</code></p>
+            ) : null}
+            {issue?.hint ? <p>处理提示：<code>{issue.hint}</code></p> : null}
+            {issue?.log_id ? <p>飞书日志 ID：<code>{issue.log_id}</code></p> : null}
+            {issue?.update ? (
+              <p>
+                lark-cli {issue.update.current ?? "当前版本"} → {issue.update.latest ?? "新版本"}：
+                <code>{issue.update.command}</code>
+              </p>
+            ) : null}
+            {(consoleUrl || troubleshooter) && (
+              <div className="lark-issue-links">
+                {consoleUrl && (
+                  <a href={consoleUrl} rel="noreferrer" target="_blank">
+                    打开飞书权限配置 <ArrowUpRight size={13} />
+                  </a>
+                )}
+                {troubleshooter && (
+                  <a href={troubleshooter} rel="noreferrer" target="_blank">
+                    查看飞书排查建议 <ArrowUpRight size={13} />
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function EmptyState({
@@ -701,8 +785,15 @@ function SettingsPage() {
     setSyncing(true);
     setMessage("");
     try {
-      await api("/api/sync/lark", { method: "POST" });
-      setMessage("只读同步完成。");
+      const status = await api<SyncStatus>("/api/sync/lark", { method: "POST" });
+      const failed = status.results.filter((result) => !result.ok);
+      if (failed.some((result) => result.issue?.requires_action)) {
+        setMessage("同步已完成，但存在需要处理的飞书权限或认证问题，请查看下方提醒。");
+      } else if (failed.length) {
+        setMessage(`同步已完成，但 ${failed.length} 个来源失败，请查看下方详情。`);
+      } else {
+        setMessage("只读同步完成。");
+      }
       await config.reload();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -758,6 +849,7 @@ function SettingsPage() {
               <strong>{config.data.lark.status.results.reduce((sum, result) => sum + (result.analysis_failed ?? 0), 0)}</strong>
             </div>
           </div>
+          <LarkSyncIssues status={config.data.lark.status} />
           <button className="primary-button full-button" disabled={syncing} onClick={syncLark}>
             <RefreshCw className={syncing ? "spin" : ""} size={17} />
             {syncing ? "正在同步…" : "立即只读同步"}

@@ -173,7 +173,36 @@ export interface SyncSourceResult {
   analyzed?: number;
   analysis_failed?: number;
   error?: string;
+  issue?: LarkSyncIssue;
   completed_at?: string;
+}
+
+export type LarkSyncIssueKind =
+  | "permission"
+  | "authentication"
+  | "invalid_parameters"
+  | "command";
+
+export interface LarkCliUpdateNotice {
+  command: string;
+  current?: string;
+  latest?: string;
+  message?: string;
+}
+
+export interface LarkSyncIssue {
+  kind: LarkSyncIssueKind;
+  requires_action: boolean;
+  message: string;
+  type?: string;
+  subtype?: string;
+  code?: string | number;
+  missing_scopes?: string[];
+  hint?: string;
+  console_url?: string;
+  log_id?: string;
+  troubleshooter?: string;
+  update?: LarkCliUpdateNotice;
 }
 
 export interface SyncStatus {

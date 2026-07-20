@@ -1,5 +1,5 @@
 import type { NormalizedSourceRecord, SyncSourceResult } from "../../core/types";
-import type { CommandRunner } from "./runner";
+import { LarkCliCommandError, type CommandRunner } from "./runner";
 import {
   normalizeCalendar,
   normalizeMessages,
@@ -15,7 +15,7 @@ export interface FetchResult {
 }
 
 function iso(value: Date): string {
-  return value.toISOString();
+  return value.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 export function splitWindows(start: Date, end: Date, windowDays = 7): Array<{ start: Date; end: Date }> {
@@ -88,7 +88,12 @@ export class LarkAdapter {
         ]);
         records = normalizeCalendar(payload);
       } else {
-        payload = await this.runner.run(["task", "+get-my-tasks", "--page-all"]);
+        payload = await this.runner.run([
+          "task",
+          "+get-my-tasks",
+          "--complete=false",
+          "--page-all"
+        ]);
         records = normalizeTasks(payload);
       }
       return {
@@ -101,11 +106,13 @@ export class LarkAdapter {
         }
       };
     } catch (error) {
+      const issue = error instanceof LarkCliCommandError ? error.issue : undefined;
       return {
         records: [],
         result: {
           ...baseResult,
-          error: error instanceof Error ? error.message : String(error)
+          error: error instanceof Error ? error.message : String(error),
+          ...(issue ? { issue } : {})
         }
       };
     }

@@ -11,8 +11,11 @@ import type {
 } from "../src/analysis/contracts";
 import { AnalysisProviderRegistry } from "../src/analysis/providers/registry";
 import { LarkAdapter } from "../src/adapters/lark/adapter";
+import { normalizeTasks } from "../src/adapters/lark/normalize";
 import {
   assertReadOnlyLarkCommand,
+  LarkCliCommandError,
+  parseLarkCliIssue,
   type CommandRunner,
   prepareReadOnlyLarkArgs,
   UnsafeLarkCommandError
@@ -154,6 +157,157 @@ describe("read-only Lark adapter", () => {
     );
   });
 
+  it("uses second-precision windows and requests only incomplete tasks", async () => {
+    const runner = new FakeRunner();
+    const adapter = new LarkAdapter(runner);
+    const start = new Date("2026-06-20T07:02:23.616Z");
+    const end = new Date("2026-06-27T07:02:23.616Z");
+
+    await adapter.fetchSource("mentions", start, end);
+    await adapter.fetchSource("calendar", start, end);
+    await adapter.fetchSource("tasks", start, end);
+
+    const mentions = runner.calls.find(
+      ([service, command]) => service === "im" && command === "+messages-search"
+    );
+    const calendar = runner.calls.find(
+      ([service, command]) => service === "calendar" && command === "+agenda"
+    );
+    const tasks = runner.calls.find(
+      ([service, command]) => service === "task" && command === "+get-my-tasks"
+    );
+    expect(mentions).toEqual(
+      expect.arrayContaining([
+        "--start",
+        "2026-06-20T07:02:23Z",
+        "--end",
+        "2026-06-27T07:02:23Z"
+      ])
+    );
+    expect(calendar).toEqual(
+      expect.arrayContaining([
+        "--start",
+        "2026-06-20T07:02:23Z",
+        "--end",
+        "2026-06-27T07:02:23Z"
+      ])
+    );
+    expect(tasks).toEqual(expect.arrayContaining(["--complete=false", "--page-all"]));
+  });
+
+  it("defensively discards completed tasks returned by the upstream CLI", () => {
+    const records = normalizeTasks({
+      tasks: [
+        {
+          guid: "task_open",
+          summary: "Open task",
+          created_at: "1784476800000",
+          status: "open"
+        },
+        {
+          guid: "task_done",
+          summary: "Done task",
+          created_at: "1784476800000",
+          status: "completed"
+        },
+        {
+          guid: "task_completed_at",
+          summary: "Completed with timestamp",
+          created_at: "1784476800000",
+          completed_at: "1784476900000",
+          status: "open"
+        }
+      ]
+    });
+    expect(records.map(({ sourceId }) => sourceId)).toEqual(["lark:task:task_open"]);
+  });
+
+  it("parses actionable permission diagnostics and CLI update notices", () => {
+    const permission = parseLarkCliIssue({
+      ok: false,
+      identity: "user",
+      error: {
+        type: "authorization",
+        subtype: "missing_scope",
+        code: 99991679,
+        message: "missing scope",
+        missing_scopes: ["im:message:readonly"],
+        hint: "lark-cli auth login --scope \"im:message:readonly\"",
+        console_url: "https://open.feishu.cn/app/permission"
+      }
+    });
+    expect(permission).toMatchObject({
+      kind: "permission",
+      requires_action: true,
+      code: 99991679,
+      missing_scopes: ["im:message:readonly"]
+    });
+
+    const invalidParameters = parseLarkCliIssue(JSON.stringify({
+      ok: false,
+      identity: "user",
+      error: {
+        type: "api",
+        subtype: "invalid_parameters",
+        code: 99992402,
+        message: "field validation failed",
+        log_id: "log_123",
+        troubleshooter: "排查建议：https://open.feishu.cn/search?code=99992402"
+      },
+      _notice: {
+        update: {
+          command: "lark-cli update",
+          current: "1.0.50",
+          latest: "1.0.72",
+          message: "update available"
+        }
+      }
+    }));
+    expect(invalidParameters).toMatchObject({
+      kind: "invalid_parameters",
+      requires_action: false,
+      code: 99992402,
+      log_id: "log_123",
+      update: {
+        command: "lark-cli update",
+        current: "1.0.50",
+        latest: "1.0.72"
+      }
+    });
+  });
+
+  it("maps structured lark-cli errors into source results", async () => {
+    const issue = parseLarkCliIssue({
+      ok: false,
+      error: {
+        type: "authorization",
+        subtype: "missing_scope",
+        message: "missing calendar scope",
+        missing_scopes: ["calendar:calendar.event:read"]
+      }
+    });
+    expect(issue).not.toBeNull();
+    const runner: CommandRunner = {
+      async run() {
+        throw new LarkCliCommandError(issue!);
+      }
+    };
+    const result = await new LarkAdapter(runner).fetchSource(
+      "calendar",
+      new Date("2026-07-19T00:00:00Z"),
+      new Date("2026-07-20T00:00:00Z")
+    );
+    expect(result.result).toMatchObject({
+      ok: false,
+      issue: {
+        kind: "permission",
+        requires_action: true,
+        missing_scopes: ["calendar:calendar.event:read"]
+      }
+    });
+    expect(result.result.error).toContain("飞书权限不足");
+  });
+
   it("normalizes all supported sources", async () => {
     const runner = new FakeRunner();
     const adapter = new LarkAdapter(runner);
@@ -243,5 +397,51 @@ describe("read-only Lark adapter", () => {
       (checkpoint.data.source_checkpoints as Record<string, unknown>).mentions
     ).toBeDefined();
     expect(index.byId("lark:message:om_mention")).toBeDefined();
+  });
+
+  it("persists actionable permission issues in synchronization status", async () => {
+    const issue = parseLarkCliIssue({
+      ok: false,
+      error: {
+        type: "authorization",
+        subtype: "missing_scope",
+        message: "calendar permission missing",
+        missing_scopes: ["calendar:calendar.event:read"],
+        hint: "authorize calendar read access"
+      }
+    });
+    const baseRunner = new FakeRunner();
+    const runner: CommandRunner = {
+      async run(args) {
+        if (args[0] === "calendar") throw new LarkCliCommandError(issue!);
+        return baseRunner.run(args);
+      }
+    };
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const sync = new LarkSyncService(
+      store,
+      index,
+      new LarkAdapter(runner),
+      createAnalysis(store, index)
+    );
+
+    const status = await sync.sync({
+      now: new Date("2026-07-20T12:00:00Z"),
+      backfillDays: 1,
+      windowDays: 1
+    });
+    const calendar = status.results.find((result) => result.source === "calendar");
+    expect(calendar?.issue).toMatchObject({
+      kind: "permission",
+      requires_action: true,
+      missing_scopes: ["calendar:calendar.event:read"]
+    });
+    expect(status.last_error).toContain("需要人工处理");
+
+    const persisted = await store.read(".context/sync/lark-status.md");
+    const results = persisted.data.results as unknown as Array<{ issue?: { kind?: string } }>;
+    expect(results.find((result) => result.issue)?.issue?.kind).toBe("permission");
   });
 });

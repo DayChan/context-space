@@ -153,7 +153,10 @@ export function normalizeTasks(payload: unknown): NormalizedSourceRecord[] {
     const members = arrayFrom(task.members, ["items"])
       .map((entry) => participant(entry, "assignee", "Assignee"))
       .filter(Boolean) as SourceParticipant[];
-    const completed = Boolean(task.completed_at) || ["done", "completed"].includes(task.status);
+    const completed =
+      Boolean(task.completed_at) ||
+      ["done", "completed"].includes(String(task.status ?? "").toLowerCase());
+    if (completed) return [];
     return [
       {
         sourceId: `lark:task:${id}`,

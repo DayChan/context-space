@@ -159,6 +159,7 @@ export class LarkSyncService {
             ...sourceResult,
             ok: false,
             error: fetched.result.error,
+            ...(fetched.result.issue ? { issue: fetched.result.issue } : {}),
             completed_at: undefined
           };
           break;
@@ -191,9 +192,15 @@ export class LarkSyncService {
       started_at: this.status.started_at,
       completed_at: nowIso(),
       results,
-      last_error: results.some((result) => !result.ok)
-        ? "One or more Lark sources failed; successful sources were preserved."
-        : null
+      last_error: (() => {
+        const failed = results.filter((result) => !result.ok);
+        if (!failed.length) return null;
+        const actionable = failed.find((result) => result.issue?.requires_action);
+        if (actionable) {
+          return `飞书同步需要人工处理：${actionable.source} - ${actionable.error ?? "权限或认证失败"}`;
+        }
+        return `飞书同步存在失败来源：${failed.map(({ source }) => source).join("、")}；成功来源已保留。`;
+      })()
     };
     await this.persistStatus();
     await this.index.rebuild(this.store);
