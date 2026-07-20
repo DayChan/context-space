@@ -1,0 +1,137 @@
+.env.example
+  s_730dd22e3c1143::t_bc61d2a7a14d7d 8-11,16-17
+README.md
+  s_730dd22e3c1143::t_81d9f08c3715b3 3,5,10,14-15,45-47,51,54-56,67,71,98,104,124,137,196,200-222
+openspec/changes/separate-machine-and-human-context-storage/.openspec.yaml
+  s_730dd22e3c1143::t_3a8a6bcae32941 1-2
+openspec/changes/separate-machine-and-human-context-storage/design.md
+  s_730dd22e3c1143::t_75a8a5832fe340 1-145
+openspec/changes/separate-machine-and-human-context-storage/proposal.md
+  s_730dd22e3c1143::t_fc291450e78d71 1-45
+openspec/changes/separate-machine-and-human-context-storage/specs/candidate-review-workflow/spec.md
+  s_730dd22e3c1143::t_034c279003d363 1-33
+openspec/changes/separate-machine-and-human-context-storage/specs/context-workbench-ui/spec.md
+  s_730dd22e3c1143::t_139deea50182ad 1-49
+openspec/changes/separate-machine-and-human-context-storage/specs/durable-analysis-queue/spec.md
+  s_730dd22e3c1143::t_a46266ab3715c2 1-29
+openspec/changes/separate-machine-and-human-context-storage/specs/knowledge-wiki/spec.md
+  s_730dd22e3c1143::t_74c5667c427350 1-29
+openspec/changes/separate-machine-and-human-context-storage/specs/lark-context-sync/spec.md
+  s_730dd22e3c1143::t_c7e63fdc8e7bf8 1-26
+openspec/changes/separate-machine-and-human-context-storage/specs/llm-content-analysis/spec.md
+  s_730dd22e3c1143::t_4af0ba15f55de8 1-45
+openspec/changes/separate-machine-and-human-context-storage/specs/machine-context-store/spec.md
+  s_730dd22e3c1143::t_85790505cd670e 1-37
+openspec/changes/separate-machine-and-human-context-storage/specs/markdown-context-store/spec.md
+  s_730dd22e3c1143::t_51f75ac0119a43 1-29
+openspec/changes/separate-machine-and-human-context-storage/specs/markdown-index-sync/spec.md
+  s_730dd22e3c1143::t_2de31c67155ec6 1-30
+openspec/changes/separate-machine-and-human-context-storage/specs/people-profiles/spec.md
+  s_730dd22e3c1143::t_6f872f4ba9ca24 1-15
+openspec/changes/separate-machine-and-human-context-storage/specs/todo-management/spec.md
+  s_730dd22e3c1143::t_5907585baa1ff2 1-19
+openspec/changes/separate-machine-and-human-context-storage/tasks.md
+  s_730dd22e3c1143::t_ea6139f4a277cd 1-64
+openspec/changes/separate-machine-and-human-context-storage/verification-report.md
+  s_730dd22e3c1143::t_9e8324f9035069 1-52
+package-lock.json
+  s_730dd22e3c1143::t_da1a4af2f5029f 12-13,27,2063-2072,2882-2901,2915-2928,2939-2958,3041-3064,3184-3204,3466-3480,3491-3499,3614-3622,4022-4030,4155-4160,4313-4318,4413-4418,4671-4690,4744-4749,5514-5525,5549-5557,5568-5573,5599-5604,5621-5644,5900-5926,5966-5975,6030-6053,6125-6151,6264-6283,6511-6555,6595-6603,6812-6839,7059-7070,7210-7215
+package.json
+  s_730dd22e3c1143::t_1fc9919a6b3d2f 26-27,41
+src/adapters/lark/sync.ts
+  s_730dd22e3c1143::t_1d49e819673d9d 2-5,13-19,31-34,47,50-53,55,65-77,79-86,88-107,115-117,121,123-129,131-151,164-167,182,209-215,220-223,289-296,298-308,317,320,339,365-370,372-373,386,394-401,404,411,413,417-419,421-424,429,433-443,445-448,450-458,460-461,464-492
+src/analysis/candidate-review.ts
+  s_730dd22e3c1143::t_dcca47989088ed 1-255
+src/analysis/config.ts
+  s_730dd22e3c1143::t_9d258b4f8ea6c8 3,20,51,58-60,81,84-94,97-133
+src/analysis/persistent-processor.ts
+  s_730dd22e3c1143::t_61fa6281114548 1-303
+src/analysis/worker.ts
+  s_730dd22e3c1143::t_663cf763b2ebb7 1-94
+src/core/index.ts
+  s_730dd22e3c1143::t_b8a441d8d666ab 4-5,20-24,26,30-33,52,57,62,67,76
+src/core/markdown-index-sync.ts
+  s_730dd22e3c1143::t_87fd3923884737 1-146
+src/core/markdown-schema.ts
+  s_730dd22e3c1143::t_7a1b29d41f0f75 1-166
+src/core/overview.ts
+  s_730dd22e3c1143::t_c692e901d56d74 81-84
+src/core/types.ts
+  s_730dd22e3c1143::t_9834e157acd560 257
+src/core/workspace.ts
+  s_730dd22e3c1143::t_6a7f0f399d3908 214-236
+src/machine/analysis-repository.ts
+  s_730dd22e3c1143::t_5445bd94f4b52b 1-755
+src/machine/context-repository.ts
+  s_730dd22e3c1143::t_935d6bdfbcf41b 1-342
+src/machine/database.ts
+  s_730dd22e3c1143::t_177e1bc80742eb 1-44
+src/machine/index.ts
+  s_730dd22e3c1143::t_dee82528deea03 1-46
+src/machine/json.ts
+  s_730dd22e3c1143::t_d091c8b2c42661 1-7
+src/machine/legacy-migration.ts
+  s_730dd22e3c1143::t_69362b84e4c550 1-603
+src/machine/markdown-index-repository.ts
+  s_730dd22e3c1143::t_5137875ef744b2 1-344
+src/machine/migrations.ts
+  s_730dd22e3c1143::t_facb4b0f95e373 1-273
+src/machine/retention-worker.ts
+  s_730dd22e3c1143::t_909a260d4f422c 1-34
+src/machine/settings-repository.ts
+  s_730dd22e3c1143::t_638fc2faa3a95f 1-45
+src/machine/sync-repository.ts
+  s_730dd22e3c1143::t_2f6c9b0505df3f 1-140
+src/server/app.ts
+  s_730dd22e3c1143::t_eb2d4ff2483ae3 2,6-9,11-19,29,49-62,68-70,79,81-83,87,89,122-123,125-133,149-182,215-243,250,255-260,267-268,272,274-298,309-310,313,323-324,326-328,348-351,354-357,375,381-409,416-421,423-436,440-453,458-461,463-469,477-478,480-488,493-495,501,538-557,570-573,582,597,609,617,620-627,634-638,645-647,652-653,656-661,664,670,675,691-714,744-746,755-758,765,791-799,802-805,809-895,898-906,908-945,949,953-978,994
+src/server/context-query.ts
+  s_730dd22e3c1143::t_e2854a216a24e3 1-234
+src/server/daily-summary.ts
+  s_730dd22e3c1143::t_74c67ac17b1e95 1-96
+src/server/human-documents.ts
+  s_730dd22e3c1143::t_33ba724b8331e7 1-60
+src/server/main.ts
+  s_730dd22e3c1143::t_c84e4ff318106c 9-13,41,46-48,68-71
+src/web/App.tsx
+  s_730dd22e3c1143::t_dd893704b2f59a 42,60-66,76,91-115,122,136-143,565,585-588,594-606,613-620,623,654-658,667-669,690-692,695-699,702-710,713,715,724-726,728-745,748-753,756-757,761-771,773-774,778-782,1068,1078-1079,1089,1125-1126,1139-1148,1152-1153,1275-1310,1313-1314,1423-1426,1428-1444,1471-1498,1572-1576,1581-1593,1641,1757-1790,1841-1855
+src/web/api.ts
+  s_730dd22e3c1143::t_9f468bd385838c 1-23,25-26,31
+tests/analysis-queue.test.ts
+  s_730dd22e3c1143::t_b0a0841abebefc 1-225
+tests/analysis-worker.test.ts
+  s_730dd22e3c1143::t_2099687f9450f7 1-190
+tests/api.test.ts
+  s_730dd22e3c1143::t_7fba8a3eaceb5a 13,65-91,121-123,127-130,140-153,157-164,166-173,214,217-219,221-223,231-233,238-240,244-246,253-359,362-369,372-374,376-394,397-399,401-403,407,411-415,417-419,423,426-444,489-496,498-505,549,564-566,572,581,589,605-607,610-613,616-619,640-647,649-651,653,655-657,669-671,728-736
+tests/candidate-review.test.ts
+  s_730dd22e3c1143::t_2991bf96411550 1-174
+tests/frontend.test.tsx
+  s_730dd22e3c1143::t_d0fdf8874f26c1 15,157,194,201,240-247,262-267,269-272,274-288,295-297,315,318,321,324-326,344-355,377,380-388,420-432,528-533,535,538-540
+tests/lark.test.ts
+  s_730dd22e3c1143::t_41e0ea0a672d12 32-63,254,331-332,350-354,371-373,389-395,397-399,408-410,413-414,481,495,497,594,612,616-618,626-630,632,657,677,851-853,863-866,873,875,877-879,889-890,893,898-899,913-922,934-936,962-963,981-985
+tests/legacy-migration.test.ts
+  s_730dd22e3c1143::t_188e56baa10793 1-260
+tests/machine-context.test.ts
+  s_730dd22e3c1143::t_06f4a955d17cd0 1-167
+tests/machine-database.test.ts
+  s_730dd22e3c1143::t_73a98dda0e9b2e 1-86
+tests/markdown-index-sync.test.ts
+  s_730dd22e3c1143::t_ce4ce89c70ef03 1-204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9922c38ef09a1279faccb75a8a73b308b988aaf1",
+  "prompts": {},
+  "sessions": {
+    "s_730dd22e3c1143": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7efa-81f7-7213-beca-f2211afe59cb",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
