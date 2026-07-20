@@ -1,0 +1,57 @@
+README.md
+  s_9a2d24a49d1051::t_d3a4b7fdf0ee27 56-57
+openspec/changes/fix-p2p-sync-pagination/.openspec.yaml
+  s_9a2d24a49d1051::t_47def29217dced 1-2
+openspec/changes/fix-p2p-sync-pagination/design.md
+  s_9a2d24a49d1051::t_34f389763322fd 1-73
+openspec/changes/fix-p2p-sync-pagination/proposal.md
+  s_9a2d24a49d1051::t_dcffbe2fa2fece 1-28
+openspec/changes/fix-p2p-sync-pagination/specs/lark-context-sync/spec.md
+  s_9a2d24a49d1051::t_056fa51672c487 1-31
+openspec/changes/fix-p2p-sync-pagination/tasks.md
+  s_9a2d24a49d1051::t_fc256c90e931dd 1-21
+openspec/changes/fix-workbench-interactions-and-sync-status/.openspec.yaml
+  s_9a2d24a49d1051::t_ceb4072c0ff97b 1-2
+openspec/changes/fix-workbench-interactions-and-sync-status/design.md
+  s_9a2d24a49d1051::t_9cb77d7bef86a0 1-52
+openspec/changes/fix-workbench-interactions-and-sync-status/proposal.md
+  s_9a2d24a49d1051::t_d6ae344d5cd6cb 1-28
+openspec/changes/fix-workbench-interactions-and-sync-status/specs/context-workbench-ui/spec.md
+  s_9a2d24a49d1051::t_ba35333aff5894 1-32
+openspec/changes/fix-workbench-interactions-and-sync-status/specs/lark-context-sync/spec.md
+  s_9a2d24a49d1051::t_30ea3ee74526c0 1-23
+openspec/changes/fix-workbench-interactions-and-sync-status/specs/llm-content-analysis/spec.md
+  s_9a2d24a49d1051::t_5eb609df333be2 1-16
+openspec/changes/fix-workbench-interactions-and-sync-status/specs/todo-management/spec.md
+  s_9a2d24a49d1051::t_c35ba6608e9c0c 1-16
+src/adapters/lark/adapter.ts
+  s_9a2d24a49d1051::t_70b8f191a4d82d 15-18,25-43,61-66,80,90-97,100,111-118,141-144,156
+src/adapters/lark/sync.ts
+  s_9a2d24a49d1051::t_cffd9b029501b4 10,27-34,92,115-144,148,150,157-166,168-173,199-212,234-242,248-259,265,299-308,312-318,325-460,464-465,478-484,488,494-495,509-512,537-550,622-635,676-687
+src/analysis/writer.ts
+  s_9a2d24a49d1051::t_dfbe8a85180892 96
+src/core/types.ts
+  s_9a2d24a49d1051::t_d9415d5b147712 225-243,282-283
+src/core/workspace.ts
+  s_9a2d24a49d1051::t_755539d929af99 156-157
+src/server/app.ts
+  s_9a2d24a49d1051::t_031b8b8935c882 34,36,60-65,151-167,171,357-375,510-513
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "118386f000cb1a1c4d46777478ea76dca401a36f",
+  "prompts": {},
+  "sessions": {
+    "s_9a2d24a49d1051": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7eeb-f0ad-7c62-81f3-0abdc39b8d39",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
