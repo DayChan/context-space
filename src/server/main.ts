@@ -6,6 +6,11 @@ import { createLogger } from "../logging";
 
 const port = Number(process.env.CONTEXT_SPACE_PORT ?? 4318);
 const host = process.env.CONTEXT_SPACE_HOST ?? "127.0.0.1";
+if (!["127.0.0.1", "localhost", "::1"].includes(host)) {
+  throw new Error(
+    "Context Space V1 仅支持单用户本机运行，CONTEXT_SPACE_HOST 必须是 loopback 地址"
+  );
+}
 const workspaceRoot = path.resolve(process.env.CONTEXT_SPACE_ROOT ?? "./workspace");
 
 const webRoot = path.resolve("./dist");
@@ -33,11 +38,14 @@ try {
     console_logging: logger.config.consoleEnabled,
     file_logging: logger.config.fileEnabled
   });
-  const { app } = await createApp({
+  const { app, runtime } = await createApp({
     workspaceRoot,
     staticRoot: existsSync(webRoot) ? webRoot : undefined,
     logger
   });
+  runtime.analysisWorker.start();
+  runtime.sourceRetention.start();
+  await runtime.markdownIndexSync.start();
   const server = app.listen(port, host, () => {
     serverLogger.info("server.listening", {
       host,
@@ -57,6 +65,10 @@ try {
     timeout.unref();
     try {
       await closeServer(server);
+      await runtime.analysisWorker.stop();
+      await runtime.markdownIndexSync.stop();
+      runtime.sourceRetention.stop();
+      runtime.database.close();
       serverLogger.info("server.stopped", { reason });
     } catch (error) {
       exitCode = 1;

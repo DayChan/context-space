@@ -1,17 +1,18 @@
 # Context Space
 
-Context Space 是一个本地优先的工作上下文系统。它通过 `lark-cli` 只读采集与工作有关的飞书消息、日程、任务和人物，将规范记录保存为 Markdown，并在本地 Web 界面中呈现 Todo、人物、知识、时间线和 Loop 就绪状态。
+Context Space 是一个单用户、本机运行的工作上下文系统。它通过 `lark-cli` 只读采集与工作有关的飞书消息、日程、任务和人物，并在本地 Web 界面中呈现 Todo、人物、知识、时间线和 Loop 就绪状态。
 
-非结构化的群聊提及和 P2P 消息不再通过关键词或正则分类，而是交给 LLM 做语义分析。飞书原生任务、身份归一化、稳定 ID、Schema 校验、优先级和 Markdown 写入仍由确定性代码负责。
+存储按所有权拆分：人工维护的 Todo、人物备注和知识以 Markdown 为规范真相；飞书来源、上游数据、同步状态、设置、分析队列、LLM 候选和审核状态以 `.context/context-space.db` 中的 SQLite 为规范真相。所有 LLM 输出都必须先进入 Inbox，由用户接受后才能物化为 Markdown。
 
 ## V1 安全边界
 
 - 服务默认只监听 `127.0.0.1`。
+- 所有修改型 API 都要求进程级随机 CSRF Token；带 Origin 的请求还必须通过精确 Origin 校验。
 - 飞书集成使用 `lark-cli --as user` 和严格的只读命令白名单。
 - LLM 在完整拉取落盘后接收有容量上限的批量上下文；每条来源文本都会明确标记为不可信数据。
 - Codex 运行在独立空目录、只读沙箱中，并禁用 shell、hooks、apps、多智能体、Web 搜索和 MCP；任何异常工具事件仍会使分析失败。
-- 凭证、访问令牌、Prompt 原文和额外来源正文不会写入分析运行 Markdown。
-- Provider 失败时仍保存来源并推进同步检查点，不会静默切换 Provider，也不会回退到硬编码分类。
+- 凭证、访问令牌、Prompt 原文和额外来源正文不会写入 Markdown。
+- Provider 失败不影响已经提交的来源和同步游标；分析任务在本地持久队列中有界重试，不会静默切换 Provider。
 - `workspace/` 默认不进入 Git，因为其中可能包含私人工作内容。
 - Loop 可见但不可执行；V1 没有执行端点、调度器或外部动作按钮。
 
@@ -41,14 +42,18 @@ Web 界面运行于 `http://127.0.0.1:5173`，API 代理到 `http://127.0.0.1:43
 CONTEXT_SPACE_ROOT=/absolute/private/path npm run dev
 ```
 
-首次启动时，Context Space 会幂等创建版本化目录和基础 Markdown 配置。搜索与反向链接索引可以随时删除并从 Markdown 重建。
+首次启动时，Context Space 会创建人工内容目录、权限为 `0600` 的 SQLite 数据库并执行版本化 migration。Markdown 索引在启动时全量校准，运行时监听单文件变化，并每 5 分钟低频校准一次；索引可以从人工 Markdown 完整重建。
+
+原始来源正文默认保留 90 天，可通过 SQLite 设置 `source_retention_days` 调整。清理后仍保留来源 ID、时间、参与者、正文 SHA-256 和审计元数据；未完成分析或仍被待审核候选引用的正文不会提前清理。
 
 ## 飞书同步
 
-Use the Settings page or:
+使用 Settings 页面触发同步。直接调用修改型 API 时，先读取 CSRF Token：
 
 ```bash
-curl -X POST http://127.0.0.1:4318/api/sync/lark
+CSRF_TOKEN="$(curl -fsS http://127.0.0.1:4318/api/security/csrf | node -pe 'JSON.parse(fs.readFileSync(0)).token')"
+curl -X POST http://127.0.0.1:4318/api/sync/lark \
+  -H "x-context-space-csrf: ${CSRF_TOKEN}"
 ```
 
 适配器读取群聊提及、P2P 消息、日程、任务和当前用户身份。同步使用检查点和重叠时间窗避免遗漏，并按来源记录失败，不修改飞书数据。
@@ -59,11 +64,11 @@ curl -X POST http://127.0.0.1:4318/api/sync/lark
 
 如果 `lark-cli` 返回权限不足、认证失效、参数错误或升级通知，Settings 会展示对应来源、错误代码、缺失 scope、官方处理提示以及可用的权限配置或排查链接。系统只提醒，不会自动授权或执行 `lark-cli update`。同步部分失败时，成功来源仍会保留并推进各自检查点。
 
-同步分为两个阶段：先拉取并持久化本轮所有可用来源，再统一映射飞书原生任务，并把提及和 P2P 消息按时间排序后批量送给 LLM。低于批次上限时，本轮消息只产生一次 LLM 请求；超过上限才拆成多个相互隔离的批次。
+同步只负责把来源、上游任务、身份、游标和分析任务原子提交到 SQLite，采集完成后立即返回，不等待 LLM。单个本地 Worker 以至少一次交付、确定性幂等键和有期限租约异步消费分析任务；Settings 分别展示同步运行和分析队列状态。
 
 ## LLM 内容分析
 
-工作区首次初始化时会创建 `config/analysis.md`：
+分析配置保存在 SQLite。旧工作区的 `config/analysis.md` 会在启动时只读、幂等导入，不会被静默改写：
 
 ```yaml
 provider: codex-sdk
@@ -90,12 +95,13 @@ max_reanalysis_records: 50
 ```bash
 curl -X PUT http://127.0.0.1:4318/api/config/analysis \
   -H 'Content-Type: application/json' \
+  -H "x-context-space-csrf: ${CSRF_TOKEN}" \
   -d '{"provider":"codex-exec","model":"替换为当前账户可用的模型ID"}'
 ```
 
 Codex SDK 支持选择模型：非空 `model` 会传给 `startThread({ model })`，Exec 方式会传给 `codex exec --model`。将 `model` 清空或保存为 `null` 时，Codex 使用当前推荐默认模型。系统不硬编码模型列表，也不会在模型不可用时静默切换；可用性由当前 Codex 认证和服务端决定。
 
-部署时可以使用 `CONTEXT_SPACE_ANALYSIS_PROVIDER=codex-sdk` 或 `codex-exec` 覆盖工作区配置。覆盖生效时 Settings 的 Provider 选择会被锁定。认证信息只应保存在 Codex 自身认证存储或进程环境中，不能写入 `config/analysis.md`。
+部署时可以使用 `CONTEXT_SPACE_ANALYSIS_PROVIDER=codex-sdk` 或 `codex-exec` 覆盖 SQLite 配置。覆盖生效时 Settings 的 Provider 选择会被锁定。认证信息只应保存在 Codex 自身认证存储或进程环境中。
 
 批量输出除 Todo 和知识候选外，还可生成以下人物观察：
 
@@ -115,6 +121,7 @@ Codex SDK 的运行项目不全是工具调用：`todo_list` 是内部计划，`
 ```bash
 curl -X POST http://127.0.0.1:4318/api/analysis/reanalyze \
   -H 'Content-Type: application/json' \
+  -H "x-context-space-csrf: ${CSRF_TOKEN}" \
   -d '{"source_id":"lark:message:替换为失败记录中的来源ID"}'
 ```
 
@@ -127,6 +134,7 @@ curl -X POST http://127.0.0.1:4318/api/analysis/reanalyze \
 ```bash
 curl -X POST http://127.0.0.1:4318/api/analysis/reanalyze \
   -H 'Content-Type: application/json' \
+  -H "x-context-space-csrf: ${CSRF_TOKEN}" \
   -d '{"source_id":"lark:message:替换为真实来源ID"}'
 ```
 
@@ -185,9 +193,32 @@ jq 'select(.sync_id == "替换为同步ID")' workspace/.context/logs/*.jsonl
 jq 'select(.run_id == "替换为分析运行ID")' workspace/.context/logs/*.jsonl
 ```
 
-`.context/sync/*.md` 和 `.context/analysis/runs/*.md` 仍是面向产品状态的规范审计记录；JSONL 日志用于排障和还原执行过程。
+SQLite 中的 `sync_runs`、`analysis_jobs`、`analysis_runs` 和审核表是产品状态的规范审计记录；JSONL 日志用于排障和还原执行过程。
 
 日志不会记录 HTTP 查询值或请求体、飞书响应正文、原始消息正文、LLM Prompt、完整模型响应、stdout、stderr、Cookie、认证头或凭证。错误消息、堆栈和 Codex Exec diagnostic 会在持久化前脱敏并截断。不要让多个 Context Space 进程共享同一个日志目录；当前文件轮转按单进程设计。若工作区使用自定义路径，请确保该目录也不会提交到 Git 或公开备份。
+
+## 旧工作区迁移
+
+启动时会幂等导入旧的来源、同步状态、分析运行、候选和配置 Markdown，并在 `.context/migration-report.json` 生成逐项报告。导入不会删除或改写旧文件。
+
+确认导入数量和候选状态后，可通过本地 API 显式创建可恢复备份：
+
+```bash
+curl -X POST http://127.0.0.1:4318/api/migration/backup \
+  -H 'Content-Type: application/json' \
+  -H "x-context-space-csrf: ${CSRF_TOKEN}" \
+  -d '{"confirmed":true}'
+```
+
+旧机器 Markdown 会移动到 `.context/legacy-backups/<timestamp>/`，并写入 `backup-report.json`。人工 Todo、人物备注和知识不会移动。
+
+迁移兼容边界：
+
+- 人工 Markdown 当前支持仓库既有的 `todo@1`、`person@1` 和 `knowledge@1`；未知 Schema 只进入诊断，不会被改写。
+- 旧的未结束分析运行无法安全续跑，导入时会转为终态失败，等待用户显式重试。
+- 旧候选的证据只有在对应来源已成功导入时才写入证据表；稳定 `source_refs` 仍会保留。
+- 已经存在于人物 Markdown 中的旧人物观察继续视为人工可维护内容，不会反向拆回候选。
+- 迁移报告存在失败或冲突时，备份 API 会拒绝移动旧文件。
 
 ## 验证
 

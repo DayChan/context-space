@@ -254,6 +254,7 @@ export interface Overview {
   topTodos: TodoMetadata[];
   upcomingCalendar: SourceMetadata[];
   recentMentions: SourceMetadata[];
+  upstreamTasks: SourceMetadata[];
   waitingItems: TodoMetadata[];
   reviewCandidates: BaseMetadata[];
   knowledgeChanges: KnowledgeMetadata[];

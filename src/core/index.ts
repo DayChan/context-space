@@ -1,6 +1,8 @@
 import type { BaseMetadata, SearchResult, WorkspaceDocument } from "./types";
 import { MarkdownStore } from "./markdown-store";
 import { listMarkdownFiles } from "./workspace";
+import type { MarkdownIndexRepository } from "../machine";
+import { MarkdownIndexSync } from "./markdown-index-sync";
 
 function excerpt(body: string, query: string): string {
   const compact = body.replace(/\s+/g, " ").trim();
@@ -15,11 +17,20 @@ export class ContextIndex {
   private documentsByPath = new Map<string, WorkspaceDocument>();
   private backlinksByRef = new Map<string, Set<string>>();
 
+  constructor(
+    private readonly repository?: MarkdownIndexRepository,
+    private readonly synchronization?: MarkdownIndexSync
+  ) {}
+
   get size(): number {
-    return this.documentsByPath.size;
+    return this.repository?.size ?? this.documentsByPath.size;
   }
 
   async rebuild(store: MarkdownStore): Promise<number> {
+    if (this.repository) {
+      return (this.synchronization ??
+        new MarkdownIndexSync(store, this.repository)).reconcile();
+    }
     this.documentsById.clear();
     this.documentsByPath.clear();
     this.backlinksByRef.clear();
@@ -38,18 +49,22 @@ export class ContextIndex {
   }
 
   all<T extends BaseMetadata = BaseMetadata>(): WorkspaceDocument<T>[] {
+    if (this.repository) return this.repository.all<T>();
     return [...this.documentsByPath.values()] as WorkspaceDocument<T>[];
   }
 
   byId<T extends BaseMetadata = BaseMetadata>(id: string): WorkspaceDocument<T> | undefined {
+    if (this.repository) return this.repository.byId<T>(id);
     return this.documentsById.get(id) as WorkspaceDocument<T> | undefined;
   }
 
   byPath<T extends BaseMetadata = BaseMetadata>(filePath: string): WorkspaceDocument<T> | undefined {
+    if (this.repository) return this.repository.byPath<T>(filePath);
     return this.documentsByPath.get(filePath) as WorkspaceDocument<T> | undefined;
   }
 
   backlinks(reference: string): WorkspaceDocument[] {
+    if (this.repository) return this.repository.backlinks(reference);
     const ids = this.backlinksByRef.get(reference) ?? new Set<string>();
     return [...ids].flatMap((id) => {
       const document = this.documentsById.get(id);
@@ -58,6 +73,7 @@ export class ContextIndex {
   }
 
   search(query: string, type?: string): SearchResult[] {
+    if (this.repository) return this.repository.search(query, type);
     const normalized = query.trim().toLocaleLowerCase();
     return this.all()
       .filter((document) => !type || document.data.type === type)

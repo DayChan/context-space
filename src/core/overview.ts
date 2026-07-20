@@ -78,6 +78,10 @@ export function buildOverview(
       .filter((source) => source.source_kind === "mention")
       .sort((left, right) => right.occurred_at.localeCompare(left.occurred_at))
       .slice(0, 8),
+    upstreamTasks: sources
+      .filter((source) => source.source_kind === "task")
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+      .slice(0, 8),
     waitingItems: todos
       .filter((todo) => todo.direction === "waiting_on_them" && !["done", "dismissed"].includes(todo.status))
       .sort((left, right) => right.priority.effective - left.priority.effective),

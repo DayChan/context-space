@@ -211,6 +211,29 @@ export async function initializeWorkspace(root: string): Promise<MarkdownStore> 
   return store;
 }
 
+const HUMAN_DIRECTORIES = [
+  "todos/items",
+  "people",
+  "knowledge/projects",
+  "knowledge/decisions",
+  "knowledge/playbooks",
+  "knowledge/concepts",
+  "knowledge/glossary",
+  "knowledge/drafts",
+  ".context/logs"
+] as const;
+
+export async function initializeHumanWorkspace(
+  root: string
+): Promise<MarkdownStore> {
+  const absoluteRoot = path.resolve(root);
+  await mkdir(absoluteRoot, { recursive: true });
+  for (const directory of HUMAN_DIRECTORIES) {
+    await mkdir(path.join(absoluteRoot, directory), { recursive: true });
+  }
+  return new MarkdownStore(absoluteRoot);
+}
+
 export async function listMarkdownFiles(root: string): Promise<string[]> {
   const absoluteRoot = path.resolve(root);
   const files: string[] = [];

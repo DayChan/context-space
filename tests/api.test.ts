@@ -10,7 +10,7 @@ import type {
 import type { CommandRunner } from "../src/adapters/lark/runner";
 import { createTodoMetadata } from "../src/core/todo";
 import type {
-  KnowledgeMetadata,
+  NormalizedSourceRecord,
   PersonMetadata,
   SourceMetadata
 } from "../src/core/types";
@@ -62,6 +62,33 @@ describe("local API", () => {
   let execProvider: ApiAnalysisProvider;
   let logger: Logger;
   let logEntries: Array<Record<string, unknown>>;
+  let csrfToken: string;
+
+  function machineSource(
+    id: string,
+    kind: NormalizedSourceRecord["kind"],
+    occurredAt: string,
+    text: string,
+    title = id
+  ): NormalizedSourceRecord {
+    return {
+      sourceId: id,
+      provider: "lark",
+      kind,
+      title,
+      text,
+      occurredAt,
+      participants: [],
+      metadata: {}
+    };
+  }
+
+  function authorized<T extends { set(name: string, value: string): T }>(
+    builder: T,
+    token = csrfToken
+  ): T {
+    return builder.set("x-context-space-csrf", token);
+  }
 
   beforeEach(async () => {
     root = await mkdtemp(path.join(os.tmpdir(), "context-space-api-"));
@@ -91,9 +118,16 @@ describe("local API", () => {
       environment: {},
       logger
     });
+    csrfToken = (
+      await request(context.app).get("/api/security/csrf").expect(200)
+    ).body.token as string;
   });
 
   afterEach(async () => {
+    context.runtime.sourceRetention.stop();
+    await context.runtime.analysisWorker.stop();
+    await context.runtime.markdownIndexSync.stop();
+    context.runtime.database.close();
     await logger.close();
     await rm(root, { recursive: true, force: true });
   });
@@ -103,40 +137,40 @@ describe("local API", () => {
     expect(health.body.loopExecutionEnabled).toBe(false);
     await request(context.app).get("/api/overview").expect(200);
     await request(context.app).get("/api/search?q=workspace").expect(200);
-    await request(context.app).post("/api/loop/execute").send({ todo: "x" }).expect(404);
+    const summary = await authorized(
+      request(context.app).post("/api/summaries/daily")
+    ).expect(201);
+    expect(summary.body).toMatchObject({
+      path: expect.stringMatching(/^knowledge\/drafts\/daily_summary_/),
+      data: {
+        type: "knowledge",
+        managed: "manual",
+        knowledge_kind: "draft"
+      }
+    });
+    await authorized(request(context.app).post("/api/loop/execute"))
+      .send({ todo: "x" })
+      .expect(404);
   });
 
   it("paginates Timeline and excludes P2P direct messages", async () => {
-    const timestamp = "2026-07-20T00:00:00.000Z";
-    const source = (
-      id: string,
-      sourceKind: SourceMetadata["source_kind"],
-      updatedAt: string
-    ): SourceMetadata => ({
-      schema: "work-context/source@1",
-      id,
-      type: "source",
-      title: sourceKind === "p2p" ? "Direct message" : "Group mention",
-      managed: "generated",
-      created_at: timestamp,
-      updated_at: updatedAt,
-      source_refs: [],
-      provider: "lark",
-      source_kind: sourceKind,
-      source_id: id,
-      occurred_at: updatedAt,
-      participants: [],
-      provider_metadata: {}
-    });
-    await context.runtime.store.write(
-      "sources/lark/dms/alice/timeline_p2p.md",
-      source("lark:message:timeline_p2p", "p2p", "2026-07-20T03:00:00.000Z"),
-      "# Direct message"
+    context.runtime.machineContext.upsertSource(
+      machineSource(
+        "lark:message:timeline_p2p",
+        "p2p",
+        "2026-07-20T03:00:00.000Z",
+        "# Direct message",
+        "Direct message"
+      )
     );
-    await context.runtime.store.write(
-      "sources/lark/mentions/2026/07/timeline_mention.md",
-      source("lark:message:timeline_mention", "mention", "2026-07-20T02:00:00.000Z"),
-      "# Group mention"
+    context.runtime.machineContext.upsertSource(
+      machineSource(
+        "lark:message:timeline_mention",
+        "mention",
+        "2026-07-20T02:00:00.000Z",
+        "# Group mention",
+        "Group mention"
+      )
     );
     await context.runtime.store.write(
       "todos/items/timeline_todo.md",
@@ -177,12 +211,16 @@ describe("local API", () => {
     const loaded = await request(context.app).get("/api/documents/todo_api").expect(200);
     const update = {
       etag: loaded.body.etag,
-      data: { ...loaded.body.data, title: "Updated API Todo" },
+      title: "Updated API Todo",
       body: "# Updated"
     };
-    const saved = await request(context.app).put("/api/documents/todo_api").send(update).expect(200);
+    const saved = await authorized(
+      request(context.app).put("/api/documents/todo_api")
+    ).send(update).expect(200);
     expect(saved.body.data.title).toBe("Updated API Todo");
-    await request(context.app).put("/api/documents/todo_api").send(update).expect(409);
+    await authorized(request(context.app).put("/api/documents/todo_api"))
+      .send(update)
+      .expect(409);
   });
 
   it("updates Todo status through the dedicated endpoint", async () => {
@@ -190,95 +228,220 @@ describe("local API", () => {
     await context.runtime.store.write("todos/items/todo_status.md", todo, "# Status Todo");
     await context.runtime.index.rebuild(context.runtime.store);
 
-    const completed = await request(context.app)
-      .patch("/api/todos/todo_status/status")
+    const completed = await authorized(
+      request(context.app).patch("/api/todos/todo_status/status")
+    )
       .send({ status: "done" })
       .expect(200);
     expect(completed.body.data.status).toBe("done");
 
-    const reopened = await request(context.app)
-      .patch("/api/todos/todo_status/status")
+    const reopened = await authorized(
+      request(context.app).patch("/api/todos/todo_status/status")
+    )
       .send({ status: "open" })
       .expect(200);
     expect(reopened.body.data.status).toBe("open");
-    await request(context.app)
-      .patch("/api/todos/todo_status/status")
+    await authorized(
+      request(context.app).patch("/api/todos/todo_status/status")
+    )
       .send({ status: "invalid" })
       .expect(400);
   });
 
   it("confirms Todo and knowledge candidates into canonical collections", async () => {
-    const todo = createTodoMetadata({
-      id: "candidate_todo_api",
-      title: "确认发布计划",
-      type: "candidate",
-      status: "candidate",
-      managed: "hybrid"
-    });
     const timestamp = "2026-07-20T00:00:00.000Z";
-    const knowledge: KnowledgeMetadata = {
-      schema: "work-context/knowledge@1",
-      id: "candidate_knowledge_api",
-      type: "candidate",
-      title: "发布决策",
-      managed: "generated",
+    context.runtime.machineContext.upsertSource(
+      machineSource(
+        "lark:message:decision",
+        "mention",
+        timestamp,
+        "需要确认发布计划，并记录发布决策"
+      )
+    );
+    context.runtime.analysisJobs.enqueue({
+      id: "job_api_candidates",
+      idempotencyKey: "api-candidates",
+      sourceIds: ["lark:message:decision"],
+      config: {},
+      availableAt: timestamp
+    });
+    context.runtime.analysisJobs.claim(
+      "api-test-worker",
+      new Date(timestamp)
+    );
+    context.runtime.analysisResults.beginRun({
+      id: "run_api_candidates",
+      jobId: "job_api_candidates",
+      provider: "codex-sdk",
+      model: null,
+      promptVersion: "context-analysis@2",
+      schemaVersion: "work-context/analysis@2",
+      configHash: "config",
+      startedAt: timestamp
+    });
+    context.runtime.analysisResults.completeRun({
+      runId: "run_api_candidates",
+      jobId: "job_api_candidates",
+      workerId: "api-test-worker",
+      sourceIds: ["lark:message:decision"],
+      eventTypes: ["agent_message"],
+      usage: null,
+      completedAt: timestamp,
+      candidates: [
+        {
+          id: "candidate_todo_api",
+          stableKey: "todo-key",
+          kind: "todo",
+          title: "确认发布计划",
+          data: {
+            direction: "owed_by_me",
+            due_at: null,
+            explicit: true,
+            stakeholders: []
+          },
+          sourceRefs: ["lark:message:decision"],
+          confidence: 0.9,
+          reason: "明确行动项",
+          evidence: [
+            {
+              sourceId: "lark:message:decision",
+              quote: "需要确认发布计划"
+            }
+          ]
+        },
+        {
+          id: "candidate_knowledge_api",
+          stableKey: "knowledge-key",
+          kind: "knowledge",
+          title: "发布决策",
+          data: {
+            knowledge_kind: "decision",
+            summary: "记录发布决策",
+            tags: ["release"]
+          },
+          sourceRefs: ["lark:message:decision"],
+          confidence: 0.8,
+          reason: "明确决策",
+          evidence: [
+            {
+              sourceId: "lark:message:decision",
+              quote: "记录发布决策"
+            }
+          ]
+        },
+        {
+          id: "candidate_person_api",
+          stableKey: "person-key",
+          kind: "person_insight",
+          title: "评审前会汇总阻塞",
+          data: {
+            person_id: "person_candidate_target",
+            category: "collaboration_style",
+            text: "评审前会汇总阻塞"
+          },
+          sourceRefs: ["lark:message:decision"],
+          confidence: 0.85,
+          reason: "协作观察",
+          evidence: [
+            {
+              sourceId: "lark:message:decision",
+              quote: "评审前汇总阻塞"
+            }
+          ]
+        }
+      ]
+    });
+    const person: PersonMetadata = {
+      schema: "work-context/person@1",
+      id: "person_candidate_target",
+      type: "person",
+      title: "候选人物",
+      managed: "manual",
       created_at: timestamp,
       updated_at: timestamp,
-      source_refs: ["lark:message:decision"],
-      confidence: 0.8,
-      status: "draft",
-      knowledge_kind: "decision",
-      curation_state: "draft",
-      superseded_by: null,
-      tags: ["release"]
+      source_refs: [],
+      identities: [],
+      role: null,
+      role_origin: null,
+      is_leader: false,
+      leader_boost: 0,
+      observations: [],
+      last_interaction_at: null
     };
     await context.runtime.store.write(
-      "inbox/todo-candidates/candidate_todo_api.md",
-      todo,
-      "# 确认发布计划"
+      "people/person_candidate_target.md",
+      person,
+      "# 候选人物"
     );
-    await context.runtime.store.write(
-      "inbox/knowledge-candidates/candidate_knowledge_api.md",
-      knowledge,
-      "# 发布决策"
+    await context.runtime.markdownIndexSync.refreshPath(
+      "people/person_candidate_target.md"
     );
-    await context.runtime.index.rebuild(context.runtime.store);
-
-    const todoResponse = await request(context.app)
-      .post("/api/inbox/candidate_todo_api/confirm")
-      .send({ etag: context.runtime.index.byId(todo.id)!.etag })
+    const beforePersonAcceptance = await request(context.app)
+      .get("/api/documents/person_candidate_target")
       .expect(200);
-    expect(todoResponse.body.data).toMatchObject({
-      type: "todo",
-      status: "open",
-      managed: "hybrid"
+    expect(beforePersonAcceptance.body.pendingInsights).toEqual([
+      expect.objectContaining({ id: "candidate_person_api" })
+    ]);
+    expect(
+      context.runtime.analysisResults
+        .listCandidates(null)
+        .map(({ id }) => id)
+    ).toEqual(
+      expect.arrayContaining([
+        "candidate_todo_api",
+        "candidate_knowledge_api",
+        "candidate_person_api"
+      ])
+    );
+
+    const todoResponse = await authorized(
+      request(context.app).post("/api/candidates/candidate_todo_api/accept")
+    )
+      .expect(200);
+    expect(todoResponse.body).toMatchObject({
+      state: "accepted",
+      documentId: "todo_candidate_todo_api"
     });
     expect(
       await context.runtime.store.exists(
-        "inbox/todo-candidates/candidate_todo_api.md"
+        "todos/items/todo_candidate_todo_api.md"
       )
-    ).toBe(false);
-    expect(
-      await context.runtime.store.exists("todos/items/candidate_todo_api.md")
     ).toBe(true);
 
-    const knowledgeResponse = await request(context.app)
-      .post("/api/inbox/candidate_knowledge_api/confirm")
-      .send({ etag: context.runtime.index.byId(knowledge.id)!.etag })
+    const knowledgeResponse = await authorized(
+      request(context.app).post(
+        "/api/candidates/candidate_knowledge_api/accept"
+      )
+    )
       .expect(200);
-    expect(knowledgeResponse.body.data).toMatchObject({
-      type: "knowledge",
-      status: "curated",
-      curation_state: "curated",
-      managed: "hybrid"
+    expect(knowledgeResponse.body).toMatchObject({
+      state: "accepted",
+      documentId: "knowledge_candidate_knowledge_api"
     });
     expect(
       await context.runtime.store.exists(
-        "knowledge/decisions/candidate_knowledge_api.md"
+        "knowledge/decisions/knowledge_candidate_knowledge_api.md"
       )
     ).toBe(true);
-    expect(context.runtime.index.byId(todo.id)?.data.type).toBe("todo");
-    expect(context.runtime.index.byId(knowledge.id)?.data.type).toBe("knowledge");
+    expect(
+      context.runtime.index.byId("todo_candidate_todo_api")?.data.type
+    ).toBe("todo");
+
+    await authorized(
+      request(context.app).post("/api/candidates/candidate_person_api/accept")
+    ).expect(200);
+    const afterPersonAcceptance = await request(context.app)
+      .get("/api/documents/person_candidate_target")
+      .expect(200);
+    expect(afterPersonAcceptance.body.pendingInsights).toEqual([]);
+    expect(afterPersonAcceptance.body.acceptedInsights).toEqual([
+      expect.objectContaining({
+        id: "person_insight_candidate_person_api",
+        observations: [
+          expect.objectContaining({ text: "评审前会汇总阻塞" })
+        ]
+      })
+    ]);
   });
 
   it("resolves concrete provenance messages for People", async () => {
@@ -323,15 +486,23 @@ describe("local API", () => {
       observations: [],
       last_interaction_at: timestamp
     };
-    await context.runtime.store.write(
-      "sources/lark/dms/alice/person_api.md",
-      source,
-      "# 发布讨论\n\nAlice 会在评审前汇总阻塞项"
+    context.runtime.machineContext.upsertSource(
+      machineSource(
+        source.id,
+        "p2p",
+        source.occurred_at,
+        "# 发布讨论\n\nAlice 会在评审前汇总阻塞项",
+        source.title
+      )
     );
-    await context.runtime.store.write(
-      "sources/lark/dms/alice/person_api_newer.md",
-      newerSource,
-      "# 后续讨论\n\nAlice 确认了新的排期"
+    context.runtime.machineContext.upsertSource(
+      machineSource(
+        newerSource.id,
+        "p2p",
+        newerSource.occurred_at,
+        "# 后续讨论\n\nAlice 确认了新的排期",
+        newerSource.title
+      )
     );
     await context.runtime.store.write("people/person_api.md", person, "# Alice");
     await context.runtime.index.rebuild(context.runtime.store);
@@ -375,8 +546,7 @@ describe("local API", () => {
   });
 
   it("updates explicit Leader configuration", async () => {
-    await request(context.app)
-      .put("/api/config/leaders")
+    await authorized(request(context.app).put("/api/config/leaders"))
       .send([{ person_id: "person_alice", boost: 24 }])
       .expect(200);
     const config = await request(context.app).get("/api/config").expect(200);
@@ -391,13 +561,15 @@ describe("local API", () => {
       .get("/api/sync/lark/status")
       .expect(200);
     expect(before.body.running).toBe(false);
-    const status = await request(context.app).post("/api/sync/lark").expect(200);
+    const status = await authorized(
+      request(context.app).post("/api/sync/lark")
+    ).expect(200);
     expect(status.body.running).toBe(false);
     expect(status.body.results).toHaveLength(5);
     expect(status.body.results.every((result: { ok: boolean }) => result.ok)).toBe(true);
     expect(status.body.progress).toMatchObject({
       phase: "completed",
-      message: "同步已完成"
+      message: "同步已完成，分析任务已加入队列"
     });
     const after = await request(context.app)
       .get("/api/sync/lark/status")
@@ -406,8 +578,7 @@ describe("local API", () => {
   });
 
   it("switches providers without making an analysis call", async () => {
-    await request(context.app)
-      .put("/api/config/analysis")
+    await authorized(request(context.app).put("/api/config/analysis"))
       .send({ provider: "codex-exec", model: "test-model" })
       .expect(200);
     const config = await request(context.app).get("/api/config").expect(200);
@@ -415,8 +586,7 @@ describe("local API", () => {
     expect(config.body.analysis.config.model).toBe("test-model");
     expect(sdkProvider.calls).toBe(0);
     expect(execProvider.calls).toBe(0);
-    await request(context.app)
-      .put("/api/config/analysis")
+    await authorized(request(context.app).put("/api/config/analysis"))
       .send({ provider: "unknown-provider" })
       .expect(400);
   });
@@ -432,12 +602,21 @@ describe("local API", () => {
       environment: { CONTEXT_SPACE_ANALYSIS_PROVIDER: "codex-exec" }
     });
     const config = await request(locked.app).get("/api/config").expect(200);
+    const lockedToken = (
+      await request(locked.app).get("/api/security/csrf").expect(200)
+    ).body.token as string;
     expect(config.body.analysis.current_provider).toBe("codex-exec");
     expect(config.body.analysis.provider_locked).toBe(true);
-    await request(locked.app)
-      .put("/api/config/analysis")
+    await authorized(
+      request(locked.app).put("/api/config/analysis"),
+      lockedToken
+    )
       .send({ provider: "codex-sdk" })
       .expect(409);
+    locked.runtime.sourceRetention.stop();
+    await locked.runtime.analysisWorker.stop();
+    await locked.runtime.markdownIndexSync.stop();
+    locked.runtime.database.close();
   });
 
   it("reanalyzes one saved source through the selected provider", async () => {
@@ -458,18 +637,24 @@ describe("local API", () => {
       participants: [],
       provider_metadata: {}
     };
-    await context.runtime.store.write(
-      "sources/lark/mentions/2026/07/api_reanalysis.md",
-      source,
-      "# API reanalysis\n\n**Occurred:** 2026-07-20T00:00:00.000Z\n\n隐含工作内容"
+    context.runtime.machineContext.upsertSource(
+      machineSource(
+        source.id,
+        "mention",
+        source.occurred_at,
+        "# API reanalysis\n\n隐含工作内容",
+        source.title
+      )
     );
-    await context.runtime.index.rebuild(context.runtime.store);
-    const result = await request(context.app)
-      .post("/api/analysis/reanalyze")
+    const result = await authorized(
+      request(context.app).post("/api/analysis/reanalyze")
+    )
       .send({ source_id: source.id })
-      .expect(200);
+      .expect(202);
     expect(result.body.requested).toBe(1);
-    expect(result.body.succeeded).toBe(1);
+    expect(result.body.job_id).toMatch(/^job_/);
+    expect(sdkProvider.calls).toBe(0);
+    expect(await context.runtime.analysisWorker.runOnce()).toBe(true);
     expect(sdkProvider.calls).toBe(1);
   });
 
@@ -481,8 +666,9 @@ describe("local API", () => {
       .expect(200);
     expect(successful.headers["x-request-id"]).toBe("request-safe-1");
 
-    const failed = await request(context.app)
-      .put("/api/config/leaders")
+    const failed = await authorized(
+      request(context.app).put("/api/config/leaders")
+    )
       .set("x-request-id", "request-error-1")
       .send([{ person_id: "alice", boost: 999 }])
       .expect(400);
@@ -538,5 +724,14 @@ describe("local API", () => {
         "request-error-1"
       ])
     );
+  });
+
+  it("rejects mutations without a CSRF token or from an untrusted Origin", async () => {
+    await request(context.app)
+      .post("/api/sync/lark")
+      .expect(403, { error: "CSRF Token 无效或缺失" });
+    await authorized(request(context.app).post("/api/sync/lark"))
+      .set("Origin", "https://attacker.example")
+      .expect(403, { error: "请求 Origin 不受信任" });
   });
 });

@@ -1,11 +1,22 @@
 import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
-import { AnalysisConfigService } from "../analysis/config";
-import { AnalysisCoordinator } from "../analysis/coordinator";
+import {
+  AnalysisConfigService,
+  importLegacyAnalysisConfig
+} from "../analysis/config";
 import type { AnalysisProvider } from "../analysis/contracts";
+import {
+  analysisJobIdempotencyKey,
+  PersistentAnalysisProcessor,
+  type PersistentAnalysisJobConfig
+} from "../analysis/persistent-processor";
+import {
+  CandidateReviewService
+} from "../analysis/candidate-review";
+import { AnalysisWorker } from "../analysis/worker";
 import { CodexExecProvider } from "../analysis/providers/codex-exec";
 import { CodexSdkProvider } from "../analysis/providers/codex-sdk";
 import { AnalysisProviderRegistry } from "../analysis/providers/registry";
@@ -15,6 +26,7 @@ import { LarkAdapter } from "../adapters/lark/adapter";
 import { LarkCliCommandRunner, type CommandRunner } from "../adapters/lark/runner";
 import { LarkSyncService } from "../adapters/lark/sync";
 import { ContextIndex } from "../core/index";
+import { MarkdownIndexSync } from "../core/markdown-index-sync";
 import {
   DocumentConflictError,
   InvalidDocumentError,
@@ -28,22 +40,34 @@ import {
 } from "../core/people";
 import { calculatePriority } from "../core/todo";
 import type {
-  BaseMetadata,
-  KnowledgeMetadata,
   LeaderConfig,
   PersonMetadata,
-  SourceMetadata,
   TodoMetadata,
   TodoStatus,
   WorkspaceDocument
 } from "../core/types";
-import { nowIso } from "../core/types";
-import { initializeWorkspace } from "../core/workspace";
+import { initializeHumanWorkspace } from "../core/workspace";
+import {
+  AnalysisJobRepository,
+  AnalysisResultRepository,
+  LegacyWorkspaceMigration,
+  MachineContextRepository,
+  MarkdownIndexRepository,
+  SettingsRepository,
+  SourceRetentionWorker,
+  SyncRepository,
+  openMachineDatabase,
+  type MachineDatabase
+} from "../machine";
+import { hashStableValue } from "../analysis/run-store";
 import {
   createLogger,
   withLogContext,
   type Logger
 } from "../logging";
+import { ContextQueryService } from "./context-query";
+import { DailySummaryService } from "./daily-summary";
+import { HumanDocumentService } from "./human-documents";
 
 const leadersSchema = z.array(
   z.object({
@@ -52,21 +76,17 @@ const leadersSchema = z.array(
   })
 );
 
-const updateSchema = z.object({
-  etag: z.string().min(1),
-  data: z.record(z.string(), z.unknown()),
-  body: z.string()
-});
+const updateDocumentContentSchema = z
+  .object({
+    etag: z.string().min(1),
+    title: z.string().min(1).max(300).optional(),
+    body: z.string()
+  })
+  .strict();
 
 const todoStatusSchema = z
   .object({
     status: z.enum(["open", "done"])
-  })
-  .strict();
-
-const confirmCandidateSchema = z
-  .object({
-    etag: z.string().min(1)
   })
   .strict();
 
@@ -99,8 +119,18 @@ const reanalysisSchema = z.union([
 export interface Runtime {
   store: MarkdownStore;
   index: ContextIndex;
+  database: MachineDatabase;
+  machineContext: MachineContextRepository;
   sync: LarkSyncService;
-  analysis: AnalysisCoordinator;
+  analysisJobs: AnalysisJobRepository;
+  analysisResults: AnalysisResultRepository;
+  markdownIndexRepository: MarkdownIndexRepository;
+  analysisWorker: AnalysisWorker;
+  candidateReview: CandidateReviewService;
+  markdownIndexSync: MarkdownIndexSync;
+  query: ContextQueryService;
+  legacyMigration: LegacyWorkspaceMigration;
+  sourceRetention: SourceRetentionWorker;
   analysisConfig: AnalysisConfigService;
   analysisProviders: AnalysisProviderRegistry;
   logger: Logger;
@@ -116,16 +146,46 @@ export interface CreateAppOptions {
   logger?: Logger;
 }
 
+function mutationRequest(method: string): boolean {
+  return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+}
+
+function tokenMatches(actual: string | undefined, expected: string): boolean {
+  if (!actual) return false;
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    actualBytes.length === expectedBytes.length &&
+    timingSafeEqual(actualBytes, expectedBytes)
+  );
+}
+
+function allowedRequestOrigins(
+  request: Request,
+  environment: NodeJS.ProcessEnv
+): Set<string> {
+  const configured = environment.CONTEXT_SPACE_ALLOWED_ORIGINS
+    ?.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const requestOrigin = `${request.protocol}://${request.get("host")}`;
+  return new Set(
+    configured?.length
+      ? configured
+      : [
+          requestOrigin,
+          "http://127.0.0.1:5173",
+          "http://localhost:5173"
+        ]
+  );
+}
+
 function isTodo(document: WorkspaceDocument): document is WorkspaceDocument<TodoMetadata> {
   return document.data.type === "todo";
 }
 
 function isPerson(document: WorkspaceDocument): document is WorkspaceDocument<PersonMetadata> {
   return document.data.type === "person";
-}
-
-function safeDocumentSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 140);
 }
 
 function safeRequestId(value: string | undefined): string {
@@ -152,28 +212,90 @@ function errorStatus(error: unknown): number {
   return 500;
 }
 
+function analysisQueueStatus(jobs: AnalysisJobRepository): {
+  last_run_id: null;
+  last_status: "queued" | "running" | "succeeded" | "failed" | null;
+  last_provider: null;
+  last_completed_at: null;
+  last_error_code: null;
+  last_error_message: null;
+} {
+  const counts = jobs.counts();
+  const lastStatus =
+    counts.leased > 0
+      ? "running"
+      : counts.failed_terminal + counts.failed_retryable > 0
+        ? "failed"
+        : counts.queued > 0
+          ? "queued"
+          : counts.succeeded > 0
+            ? "succeeded"
+            : null;
+  return {
+    last_run_id: null,
+    last_status: lastStatus,
+    last_provider: null,
+    last_completed_at: null,
+    last_error_code: null,
+    last_error_message: null
+  };
+}
+
 async function apiDocument(
   document: WorkspaceDocument,
   runtime: Runtime,
   leaders: LeaderConfig[],
   options: {
     includePersonProvenance?: boolean;
+    includeBacklinks?: boolean;
     provenancePage?: number;
     provenancePageSize?: number;
   } = {}
 ): Promise<unknown> {
+  const backlinks = options.includeBacklinks
+    ? runtime.query
+        .all()
+        .filter(({ data }) => data.source_refs.includes(document.data.id))
+        .map(({ data }) => data)
+    : undefined;
   if (isTodo(document)) {
     return {
       ...document,
       data: {
         ...document.data,
         priority: calculatePriority(document.data, leaders)
-      }
+      },
+      ...(backlinks ? { backlinks } : {})
     };
   }
   if (isPerson(document)) {
-    const todos = runtime.index.all<TodoMetadata>().filter(isTodo);
+    const todos = runtime.query.all().filter(isTodo);
     const relationships = commitmentsForPerson(document.data.id, todos);
+    const pendingInsights = runtime.candidateReview
+      .list(null)
+      .filter(
+        (candidate) =>
+          candidate.kind === "person_insight" &&
+          (candidate.status === "proposed" || candidate.status === "pending") &&
+          candidate.data.person_id === document.data.id
+      )
+      .map((candidate) => ({
+        ...candidate,
+        acceptance: runtime.analysisResults.getAcceptance(candidate.id)
+      }));
+    const acceptedInsights = runtime.index
+      .all<PersonMetadata>()
+      .filter(
+        (candidate) =>
+          candidate.data.type === "person" &&
+          candidate.data.related_person_id === document.data.id
+      )
+      .map(({ path, data }) => ({
+        id: data.id,
+        title: data.title,
+        path,
+        observations: data.observations
+      }));
     const page = options.provenancePage ?? 1;
     const pageSize = options.provenancePageSize ?? 10;
     const resolvedSources = options.includePersonProvenance
@@ -184,11 +306,11 @@ async function apiDocument(
           )
         ])]
           .flatMap((reference) => {
-            const source = runtime.index.byId<SourceMetadata>(reference);
-            return source?.data.type === "source" ? [source] : [];
+            const source = runtime.machineContext.getSource(reference);
+            return source ? [source] : [];
           })
           .sort((left, right) =>
-            right.data.occurred_at.localeCompare(left.data.occurred_at)
+            right.occurredAt.localeCompare(left.occurredAt)
           )
       : [];
     const total = resolvedSources.length;
@@ -198,11 +320,12 @@ async function apiDocument(
     const provenanceSources = resolvedSources
       .slice(pageStart, pageStart + pageSize)
       .map((source) => ({
-        id: source.data.id,
-        title: source.data.title,
+        id: source.id,
+        title: source.title,
         body: source.body,
-        occurred_at: source.data.occurred_at,
-        source_kind: source.data.source_kind
+        occurred_at: source.occurredAt,
+        source_kind: source.kind,
+        body_purged_at: source.bodyPurgedAt
       }));
     return {
       ...document,
@@ -222,10 +345,16 @@ async function apiDocument(
         owedByMe: relationships.owedByMe.map(({ data }) => data),
         waitingOnThem: relationships.waitingOnThem.map(({ data }) => data),
         shared: relationships.shared.map(({ data }) => data)
-      }
+      },
+      pendingInsights,
+      acceptedInsights,
+      ...(backlinks ? { backlinks } : {})
     };
   }
-  return document;
+  return {
+    ...document,
+    ...(backlinks ? { backlinks } : {})
+  };
 }
 
 export async function createApp(options: CreateAppOptions): Promise<{
@@ -243,36 +372,101 @@ export async function createApp(options: CreateAppOptions): Promise<{
   serverLogger.info("application.initializing");
   let store: MarkdownStore;
   try {
-    store = await initializeWorkspace(options.workspaceRoot);
+    store = await initializeHumanWorkspace(options.workspaceRoot);
   } catch (error) {
     serverLogger.fatal("application.initialization.failed", { error });
     await logger.flush();
     throw error;
   }
-  const index = new ContextIndex();
-  await index.rebuild(store);
-  const analysisConfig = new AnalysisConfigService(store, environment);
+  const database = await openMachineDatabase(options.workspaceRoot);
+  const markdownIndexRepository = new MarkdownIndexRepository(database);
+  const markdownIndexSync = new MarkdownIndexSync(
+    store,
+    markdownIndexRepository
+  );
+  const index = new ContextIndex(markdownIndexRepository, markdownIndexSync);
+  await markdownIndexSync.reconcile();
+  const settings = new SettingsRepository(database);
+  await importLegacyAnalysisConfig(store, settings);
+  if (!settings.get<string>("workspace_timezone")) {
+    const workspaceConfig = (await store.exists("config/workspace.md"))
+      ? await store.read("config/workspace.md")
+      : null;
+    settings.set(
+      "workspace_timezone",
+      typeof workspaceConfig?.data.timezone === "string"
+        ? workspaceConfig.data.timezone
+        : "Asia/Shanghai"
+    );
+  }
+  if (!settings.get<LeaderConfig[]>("leaders")) {
+    const legacyLeaders = (await store.exists("config/priority-people.md"))
+      ? await store.read("config/priority-people.md")
+      : null;
+    const parsed = leadersSchema.safeParse(legacyLeaders?.data.leaders);
+    settings.set("leaders", parsed.success ? parsed.data : []);
+  }
+  const analysisConfig = new AnalysisConfigService(settings, environment);
   const analysisProviders = new AnalysisProviderRegistry(
     options.analysisProviders ?? [
       new CodexSdkProvider({ environment }),
       new CodexExecProvider({ environment })
     ]
   );
-  const analysis = new AnalysisCoordinator(
+  const machineContext = new MachineContextRepository(database);
+  const analysisJobs = new AnalysisJobRepository(database);
+  const analysisResults = new AnalysisResultRepository(database);
+  const syncRepository = new SyncRepository(database);
+  const legacyMigration = new LegacyWorkspaceMigration(
+    options.workspaceRoot,
     store,
-    index,
+    database,
+    machineContext,
+    syncRepository,
+    settings
+  );
+  await legacyMigration.run();
+  const sourceRetention = new SourceRetentionWorker(
+    machineContext,
+    settings
+  );
+  const analysisProcessor = new PersistentAnalysisProcessor(
+    machineContext,
+    analysisJobs,
+    analysisResults,
     analysisProviders,
-    analysisConfig,
     logger
   );
+  const analysisWorker = new AnalysisWorker(
+    analysisJobs,
+    analysisProcessor,
+    logger
+  );
+  const candidateReview = new CandidateReviewService(analysisResults, store);
+  const query = new ContextQueryService(index, machineContext, analysisResults);
+  const dailySummary = new DailySummaryService(store, markdownIndexSync);
+  const humanDocuments = new HumanDocumentService(
+    store,
+    index,
+    markdownIndexSync
+  );
+  await candidateReview.recover();
   const runner =
     options.commandRunner ??
     new LarkCliCommandRunner("lark-cli", logger);
   const sync = new LarkSyncService(
-    store,
-    index,
+    database,
+    machineContext,
+    syncRepository,
+    analysisJobs,
     new LarkAdapter(runner),
-    analysis,
+    async (): Promise<PersistentAnalysisJobConfig> => ({
+      analysis: (await analysisConfig.getEffective()).config,
+      timezone:
+        settings.get<string>("workspace_timezone") ?? "Asia/Shanghai",
+      currentUserId:
+        settings.get<string>("current_user_id") ?? "self"
+    }),
     logger
   );
   await sync.loadStatus();
@@ -280,19 +474,31 @@ export async function createApp(options: CreateAppOptions): Promise<{
   const runtime: Runtime = {
     store,
     index,
+    database,
+    machineContext,
     sync,
-    analysis,
+    analysisJobs,
+    analysisResults,
+    markdownIndexRepository,
+    analysisWorker,
+    candidateReview,
+    markdownIndexSync,
+    query,
+    legacyMigration,
+    sourceRetention,
     analysisConfig,
     analysisProviders,
     logger,
     async getLeaders() {
-      const document = await store.read("config/priority-people.md");
-      const parsed = leadersSchema.safeParse(document.data.leaders);
+      const parsed = leadersSchema.safeParse(
+        settings.get<LeaderConfig[]>("leaders") ?? []
+      );
       return parsed.success ? parsed.data : [];
     }
   };
 
   const app = express();
+  const csrfToken = randomBytes(32).toString("base64url");
   app.disable("x-powered-by");
   app.use((request, response, next) => {
     const requestId = safeRequestId(request.get("x-request-id"));
@@ -329,6 +535,26 @@ export async function createApp(options: CreateAppOptions): Promise<{
     });
   });
   app.use(express.json({ limit: "1mb" }));
+  app.get("/api/security/csrf", (_request, response) => {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ token: csrfToken });
+  });
+  app.use((request, response, next) => {
+    if (!mutationRequest(request.method)) {
+      next();
+      return;
+    }
+    const origin = request.get("origin");
+    if (origin && !allowedRequestOrigins(request, environment).has(origin)) {
+      response.status(403).json({ error: "请求 Origin 不受信任" });
+      return;
+    }
+    if (!tokenMatches(request.get("x-context-space-csrf"), csrfToken)) {
+      response.status(403).json({ error: "CSRF Token 无效或缺失" });
+      return;
+    }
+    next();
+  });
 
   app.get("/api/health", (_request, response) => {
     response.json({
@@ -341,7 +567,10 @@ export async function createApp(options: CreateAppOptions): Promise<{
 
   app.get("/api/overview", async (_request, response) => {
     const leaders = await runtime.getLeaders();
-    response.json(buildOverview(index.all(), leaders, sync.getStatus()));
+    response.json({
+      ...buildOverview(query.all(), leaders, sync.getStatus()),
+      analysisQueue: analysisJobs.counts()
+    });
   });
 
   app.get("/api/documents", async (request, response) => {
@@ -350,7 +579,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
     const direction =
       typeof request.query.direction === "string" ? request.query.direction : undefined;
     const leaders = await runtime.getLeaders();
-    const selected = index
+    const selected = query
       .all()
       .filter((document) => !type || document.data.type === type)
       .filter((document) => !status || document.data.status === status)
@@ -365,7 +594,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
   });
 
   app.get("/api/documents/:id", async (request, response) => {
-    const document = index.byId(request.params.id);
+    const document = query.byId(request.params.id);
     if (!document) {
       response.status(404).json({ error: "Document not found" });
       return;
@@ -377,6 +606,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
       await runtime.getLeaders(),
       {
         includePersonProvenance: document.data.type === "person",
+        includeBacklinks: true,
         provenancePage: provenancePagination.provenance_page,
         provenancePageSize: provenancePagination.provenance_page_size
       }
@@ -384,138 +614,65 @@ export async function createApp(options: CreateAppOptions): Promise<{
   });
 
   app.put("/api/documents/:id", async (request, response) => {
-    const input = updateSchema.parse(request.body);
+    const input = updateDocumentContentSchema.parse(request.body);
     const existing = index.byId(request.params.id);
     if (!existing) {
-      response.status(404).json({ error: "Document not found" });
+      const machineOwned = query.byId(request.params.id);
+      response
+        .status(machineOwned ? 403 : 404)
+        .json({
+          error: machineOwned
+            ? "Generated documents are read-only"
+            : "Document not found"
+        });
       return;
     }
     if (existing.data.managed === "generated") {
       response.status(403).json({ error: "Generated documents are read-only" });
       return;
     }
-    if (input.data.id !== existing.data.id || input.data.type !== existing.data.type) {
-      response.status(400).json({ error: "Document identity and type cannot be changed" });
-      return;
-    }
-    const data = {
-      ...existing.data,
-      ...input.data,
-      id: existing.data.id,
-      type: existing.data.type,
-      created_at: existing.data.created_at,
-      updated_at: nowIso()
-    } as BaseMetadata;
-    const saved = await store.write(existing.path, data, input.body, {
-      expectedEtag: input.etag
+    const saved = await humanDocuments.updateContent({
+      id: request.params.id,
+      etag: input.etag,
+      ...(input.title ? { title: input.title } : {}),
+      body: input.body
     });
-    await index.rebuild(store);
     response.json(saved);
   });
 
   app.patch("/api/todos/:id/status", async (request, response) => {
     const input = todoStatusSchema.parse(request.body);
-    const existing = index.byId<TodoMetadata>(request.params.id);
+    const existing = query.byId(request.params.id) as
+      | WorkspaceDocument<TodoMetadata>
+      | undefined;
     if (!existing || existing.data.type !== "todo") {
       response.status(404).json({ error: "Todo not found" });
       return;
     }
-    const data: TodoMetadata = {
-      ...existing.data,
-      status: input.status as TodoStatus,
-      updated_at: nowIso()
-    };
-    const saved = await store.write(existing.path, data, existing.body, {
-      expectedEtag: existing.etag
-    });
-    await index.rebuild(store);
-    response.json(await apiDocument(saved, runtime, await runtime.getLeaders()));
-  });
-
-  app.post("/api/inbox/:id/confirm", async (request, response) => {
-    const input = confirmCandidateSchema.parse(request.body);
-    const existing = index.byId(request.params.id);
-    if (!existing || existing.data.type !== "candidate") {
-      response.status(404).json({ error: "Inbox candidate not found" });
+    if (existing.data.managed === "generated") {
+      response.status(403).json({ error: "Upstream tasks are read-only" });
       return;
     }
-    if (existing.etag !== input.etag) {
-      throw new DocumentConflictError(
-        `Document changed since it was loaded: ${existing.path}`
-      );
-    }
-
-    let targetPath: string;
-    let confirmed: TodoMetadata | KnowledgeMetadata;
-    if (
-      "direction" in existing.data &&
-      "automation" in existing.data
-    ) {
-      const candidate = existing.data as TodoMetadata;
-      targetPath = `todos/items/${safeDocumentSegment(candidate.id)}.md`;
-      confirmed = {
-        ...candidate,
-        type: "todo",
-        status: "open",
-        managed: "hybrid",
-        updated_at: nowIso()
-      };
-    } else if (
-      "knowledge_kind" in existing.data &&
-      "curation_state" in existing.data
-    ) {
-      const candidate = existing.data as KnowledgeMetadata;
-      const directories: Record<KnowledgeMetadata["knowledge_kind"], string> = {
-        project: "projects",
-        decision: "decisions",
-        playbook: "playbooks",
-        concept: "concepts",
-        glossary: "glossary",
-        draft: "drafts"
-      };
-      targetPath = `knowledge/${directories[candidate.knowledge_kind]}/${safeDocumentSegment(candidate.id)}.md`;
-      confirmed = {
-        ...candidate,
-        type: "knowledge",
-        status: "curated",
-        curation_state: "curated",
-        managed: "hybrid",
-        updated_at: nowIso()
-      };
-    } else {
-      response.status(400).json({ error: "Unsupported Inbox candidate" });
-      return;
-    }
-
-    if (await store.exists(targetPath)) {
-      throw new DocumentConflictError(`Document already exists: ${targetPath}`);
-    }
-    const updated = await store.write(
-      existing.path,
-      confirmed,
-      existing.body,
-      { expectedEtag: input.etag }
+    const saved = await humanDocuments.updateTodoStatus(
+      request.params.id,
+      input.status as TodoStatus
     );
-    const moved = await store.move(existing.path, targetPath, {
-      expectedEtag: updated.etag
-    });
-    await index.rebuild(store);
-    response.json(await apiDocument(
-      moved,
-      runtime,
-      await runtime.getLeaders()
-    ));
+    if (!saved) {
+      response.status(404).json({ error: "Todo not found" });
+      return;
+    }
+    response.json(await apiDocument(saved, runtime, await runtime.getLeaders()));
   });
 
   app.get("/api/search", (request, response) => {
     const query = typeof request.query.q === "string" ? request.query.q : "";
     const type = typeof request.query.type === "string" ? request.query.type : undefined;
-    response.json(index.search(query, type));
+    response.json(runtime.query.search(query, type));
   });
 
   app.get("/api/timeline", (request, response) => {
     const pagination = timelinePaginationSchema.parse(request.query);
-    const timeline = buildTimeline(index.all());
+    const timeline = buildTimeline(query.all());
     const total = timeline.length;
     const totalPages = Math.max(1, Math.ceil(total / pagination.page_size));
     const page = Math.min(pagination.page, totalPages);
@@ -529,6 +686,30 @@ export async function createApp(options: CreateAppOptions): Promise<{
         total_pages: totalPages
       }
     });
+  });
+
+  app.post("/api/summaries/daily", async (_request, response) => {
+    const now = new Date();
+    const timezone =
+      settings.get<string>("workspace_timezone") ?? "Asia/Shanghai";
+    const dateParts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+      })
+        .formatToParts(now)
+        .map(({ type, value }) => [type, value])
+    );
+    const date = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+    const overview = buildOverview(
+      query.all(),
+      await runtime.getLeaders(),
+      sync.getStatus(),
+      now
+    );
+    response.status(201).json(await dailySummary.create(date, overview));
   });
 
   app.get("/api/config", async (_request, response) => {
@@ -560,6 +741,9 @@ export async function createApp(options: CreateAppOptions): Promise<{
         enabled: false,
         executionEndpoint: null
       },
+      retention: {
+        source_body_days: settings.getSourceRetentionDays()
+      },
       analysis: {
         current_provider: effectiveAnalysis.config.provider,
         config_source: effectiveAnalysis.source,
@@ -568,36 +752,17 @@ export async function createApp(options: CreateAppOptions): Promise<{
         providers,
         prompt_version: ANALYSIS_PROMPT_VERSION,
         schema_version: ANALYSIS_SCHEMA_VERSION,
-        status: await analysis.runStore.status(),
-        recent_runs: await analysis.runStore.recent(5)
+        status: analysisQueueStatus(analysisJobs),
+        queue: analysisJobs.counts(),
+        failed_jobs: analysisJobs.list("failed_terminal", 20),
+        recent_runs: []
       }
     });
   });
 
   app.put("/api/config/leaders", async (request, response) => {
     const leaders = leadersSchema.parse(request.body);
-    const existing = await store.read("config/priority-people.md");
-    await store.write(
-      existing.path,
-      { ...existing.data, leaders, updated_at: nowIso() },
-      existing.body,
-      { expectedEtag: existing.etag }
-    );
-    for (const document of index.all<PersonMetadata>().filter(isPerson)) {
-      const updated = applyLeaderConfiguration(document.data, leaders);
-      if (
-        updated.is_leader !== document.data.is_leader ||
-        updated.leader_boost !== document.data.leader_boost
-      ) {
-        await store.write(
-          document.path,
-          { ...updated, updated_at: nowIso() },
-          document.body,
-          { expectedEtag: document.etag }
-        );
-      }
-    }
-    await index.rebuild(store);
+    settings.set("leaders", leaders);
     response.json({ leaders });
   });
 
@@ -620,30 +785,195 @@ export async function createApp(options: CreateAppOptions): Promise<{
       return;
     }
     const effective = await analysisConfig.update(request.body);
-    await index.rebuild(store);
     response.json(effective);
+  });
+
+  app.put("/api/config/retention", (request, response) => {
+    const input = z
+      .object({ source_body_days: z.number().int().min(1).max(3650) })
+      .strict()
+      .parse(request.body);
+    settings.setSourceRetentionDays(input.source_body_days);
+    response.json(input);
   });
 
   app.get("/api/analysis/status", async (_request, response) => {
     response.json({
-      status: await analysis.runStore.status(),
-      recent_runs: await analysis.runStore.recent(20)
+      status: analysisQueueStatus(analysisJobs),
+      queue: analysisJobs.counts(),
+      failed_jobs: analysisJobs.list("failed_terminal", 20),
+      recent_runs: []
     });
+  });
+
+  app.post("/api/analysis/jobs/:id/retry", (request, response) => {
+    const job = analysisJobs.get(request.params.id);
+    if (!job) {
+      response.status(404).json({ error: "Analysis job not found" });
+      return;
+    }
+    if (job.status !== "failed_terminal") {
+      response.status(409).json({ error: "只有终态失败任务可以手动重试" });
+      return;
+    }
+    response.json(analysisJobs.retry(job.id));
+  });
+
+  app.get("/api/candidates", (request, response) => {
+    const rawStatus =
+      typeof request.query.status === "string"
+        ? request.query.status
+        : "reviewable";
+    if (rawStatus === "reviewable") {
+      response.json(
+        candidateReview
+          .list(null)
+          .filter(
+            ({ status }) => status === "proposed" || status === "pending"
+          )
+          .map((candidate) => ({
+            ...candidate,
+            acceptance: analysisResults.getAcceptance(candidate.id)
+          }))
+      );
+      return;
+    }
+    const status =
+      rawStatus === "all"
+        ? null
+        : z
+            .enum(["proposed", "rejected", "pending", "accepted"])
+            .parse(rawStatus);
+    response.json(
+      candidateReview.list(status).map((candidate) => ({
+        ...candidate,
+        acceptance: analysisResults.getAcceptance(candidate.id)
+      }))
+    );
+  });
+
+  app.get("/api/candidates/:id", (request, response) => {
+    const candidate = candidateReview.get(request.params.id);
+    if (!candidate) {
+      response.status(404).json({ error: "Candidate not found" });
+      return;
+    }
+    response.json({
+      ...candidate,
+      acceptance: analysisResults.getAcceptance(candidate.id)
+    });
+  });
+
+  app.post("/api/candidates/:id/reject", (request, response) => {
+    const candidate = candidateReview.get(request.params.id);
+    if (!candidate) {
+      response.status(404).json({ error: "Candidate not found" });
+      return;
+    }
+    response.json(candidateReview.reject(request.params.id));
+  });
+
+  app.post("/api/candidates/:id/accept", async (request, response) => {
+    const candidate = candidateReview.get(request.params.id);
+    if (!candidate) {
+      response.status(404).json({ error: "Candidate not found" });
+      return;
+    }
+    const operation = await candidateReview.accept(request.params.id);
+    if (operation.state === "accepted") {
+      await markdownIndexSync.refreshPath(operation.documentPath);
+    }
+    if (operation.state === "conflict") {
+      response.status(409).json({
+        error: operation.error ?? "候选物化发生冲突",
+        operation
+      });
+      return;
+    }
+    response.json(operation);
   });
 
   app.post("/api/analysis/reanalyze", async (request, response) => {
     const input = reanalysisSchema.parse(request.body);
-    const result =
+    const effective = await analysisConfig.getEffective();
+    const jobConfig: PersistentAnalysisJobConfig = {
+      analysis: effective.config,
+      timezone:
+        settings.get<string>("workspace_timezone") ?? "Asia/Shanghai",
+      currentUserId:
+        settings.get<string>("current_user_id") ?? "self"
+    };
+    const selected =
       "source_id" in input
-        ? await analysis.reanalyzeSource(input.source_id)
-        : await analysis.reanalyzeRange(input.from, input.to, input.limit);
-    await index.rebuild(store);
-    response.json(result);
+        ? [machineContext.getSource(input.source_id)].filter(
+            (source): source is NonNullable<typeof source> => Boolean(source)
+          )
+        : machineContext.listSources({
+            kinds: ["mention", "p2p"],
+            from: input.from,
+            to: input.to,
+            limit: Math.min(
+              input.limit ?? effective.config.max_reanalysis_records,
+              effective.config.max_reanalysis_records
+            )
+          });
+    if ("source_id" in input && !selected.length) {
+      response.status(404).json({ error: `来源不存在：${input.source_id}` });
+      return;
+    }
+    const sourceIds = selected.map(({ id }) => id);
+    const sourceHash = hashStableValue(
+      selected.map(({ id, bodyHash }) => ({ id, bodyHash }))
+    );
+    const baseKey = analysisJobIdempotencyKey({
+      sourceIds,
+      sourceHash,
+      config: jobConfig
+    });
+    const job = analysisJobs.enqueue({
+      idempotencyKey: hashStableValue({
+        baseKey,
+        explicitReanalysis: randomUUID()
+      }),
+      sourceIds,
+      config: jobConfig as unknown as Record<string, unknown>
+    });
+    response.status(202).json({
+      requested: sourceIds.length,
+      queued: sourceIds.length,
+      job_id: job.id
+    });
   });
 
   app.post("/api/index/rebuild", async (_request, response) => {
-    const count = await index.rebuild(store);
+    const count = await markdownIndexSync.reconcile();
     response.json({ ok: true, count });
+  });
+
+  app.get("/api/markdown/diagnostics", (_request, response) => {
+    response.json(markdownIndexRepository.diagnostics());
+  });
+
+  app.get("/api/markdown/status", (_request, response) => {
+    response.json(markdownIndexSync.status());
+  });
+
+  app.get("/api/migration/report", (_request, response) => {
+    response.json(settings.get("legacy_migration_last_report") ?? null);
+  });
+
+  app.post("/api/migration/backup", async (request, response) => {
+    const confirmed =
+      request.body &&
+      typeof request.body === "object" &&
+      (request.body as Record<string, unknown>).confirmed === true;
+    if (!confirmed) {
+      response.status(400).json({
+        error: "备份旧机器 Markdown 前必须显式提交 confirmed=true"
+      });
+      return;
+    }
+    response.json(await legacyMigration.backup({ confirmed: true }));
   });
 
   app.post("/api/sync/lark", async (_request, response, next) => {
@@ -661,7 +991,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
 
   app.get("/api/loop", async (_request, response) => {
     const overview = buildOverview(
-      index.all(),
+      query.all(),
       await runtime.getLeaders(),
       sync.getStatus()
     );

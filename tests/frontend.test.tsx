@@ -12,6 +12,7 @@ import type {
   TodoMetadata
 } from "../src/core/types";
 import { DEFAULT_AUTOMATION, EMPTY_SYNC_STATUS } from "../src/core/types";
+import type { StoredCandidate } from "../src/machine";
 import { AppView } from "../src/web/App";
 
 const owedTodo: TodoMetadata = {
@@ -153,6 +154,7 @@ const overview: Overview = {
   topTodos: [owedTodo],
   upcomingCalendar: [],
   recentMentions: [],
+  upstreamTasks: [],
   waitingItems: [waitingTodo],
   reviewCandidates: [],
   knowledgeChanges: [],
@@ -189,18 +191,14 @@ let selectedModel: string | null = null;
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
 let owedTodoStatus: TodoMetadata["status"] = "open";
 let configuredLeaders: LeaderConfig[] = [];
-let inboxCandidates: Array<{
-  path: string;
-  data: TodoMetadata;
-  body: string;
-  etag: string;
-}> = [];
+let inboxCandidates: Array<StoredCandidate & { acceptance: null }> = [];
 
 function configResponse() {
   return {
     leaders: configuredLeaders,
     lark: { status: larkStatus, readOnly: true, identity: "user" },
     loop: { enabled: false, executionEndpoint: null },
+    retention: { source_body_days: 90 },
     analysis: {
       current_provider: selectedProvider,
       config_source: "workspace",
@@ -239,6 +237,14 @@ function configResponse() {
         last_error_code: null,
         last_error_message: null
       },
+      queue: {
+        queued: 0,
+        leased: 0,
+        succeeded: 1,
+        failed_retryable: 0,
+        failed_terminal: 0
+      },
+      failed_jobs: [],
       recent_runs: []
     }
   };
@@ -253,22 +259,42 @@ beforeEach(() => {
   configuredLeaders = [];
   inboxCandidates = [
     {
-      path: "inbox/todo-candidates/candidate_frontend.md",
+      id: "candidate_frontend",
+      runId: "analysis_run_frontend",
+      stableKey: "candidate-key",
+      kind: "todo",
+      status: "proposed",
+      title: "确认上线检查项",
       data: {
-        ...owedTodo,
-        id: "candidate_frontend",
-        title: "确认上线检查项",
-        type: "candidate",
-        status: "candidate"
+        direction: "owed_by_me",
+        due_at: null,
+        explicit: true,
+        stakeholders: []
       },
-      body: "# 确认上线检查项\n\n需要人工确认后进入 Todo。",
-      etag: "candidate-etag"
+      sourceRefs: ["lark:message:frontend"],
+      confidence: 0.9,
+      reason: "需要人工确认后进入 Todo。",
+      provider: "codex-sdk",
+      promptVersion: "context-analysis@2",
+      analyzedAt: "2026-07-20T01:00:00Z",
+      createdAt: "2026-07-20T01:00:00Z",
+      reviewedAt: null,
+      evidence: [
+        {
+          sourceId: "lark:message:frontend",
+          quote: "确认上线检查项"
+        }
+      ],
+      acceptance: null
     }
   ];
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === "/api/security/csrf") {
+        return jsonResponse({ token: "frontend-csrf-token" });
+      }
       if (url === "/api/config/analysis") {
         const body = JSON.parse(String(init?.body ?? "{}")) as {
           provider?: string;
@@ -286,19 +312,18 @@ beforeEach(() => {
         ) as LeaderConfig[];
         return jsonResponse(configuredLeaders);
       }
-      if (url.startsWith("/api/inbox/") && url.endsWith("/confirm")) {
+      if (url.startsWith("/api/candidates/") && url.endsWith("/accept")) {
         const id = decodeURIComponent(url.split("/")[3]);
         const confirmed = inboxCandidates.find(
-          (candidate) => candidate.data.id === id
+          (candidate) => candidate.id === id
         );
         inboxCandidates = inboxCandidates.filter(
-          (candidate) => candidate.data.id !== id
+          (candidate) => candidate.id !== id
         );
         return jsonResponse({
-          ...confirmed,
-          data: confirmed
-            ? { ...confirmed.data, type: "todo", status: "open" }
-            : null
+          candidateId: confirmed?.id,
+          state: "accepted",
+          documentId: confirmed ? `todo_${confirmed.id}` : null
         });
       }
       if (url === "/api/sync/lark/status") return jsonResponse(larkStatus);
@@ -316,7 +341,18 @@ beforeEach(() => {
         });
       }
       if (url === "/api/config") return jsonResponse(configResponse());
-      if (url.startsWith("/api/overview")) return jsonResponse(overview);
+      if (url.startsWith("/api/overview")) {
+        return jsonResponse({
+          ...overview,
+          analysisQueue: {
+            queued: 0,
+            leased: 0,
+            succeeded: 1,
+            failed_retryable: 0,
+            failed_terminal: 0
+          }
+        });
+      }
       if (url.startsWith("/api/timeline")) {
         const parsed = new URL(url, "http://context-space.local");
         const page = Number(parsed.searchParams.get("page") ?? "1");
@@ -338,8 +374,17 @@ beforeEach(() => {
           { path: "todos/waiting.md", data: waitingTodo, body: "", etag: "2" }
         ]);
       }
-      if (url.startsWith("/api/documents?type=candidate")) {
+      if (url === "/api/candidates") {
         return jsonResponse(inboxCandidates);
+      }
+      if (url === "/api/markdown/diagnostics") return jsonResponse([]);
+      if (url === "/api/markdown/status") {
+        return jsonResponse({
+          watcherRunning: true,
+          lastReconciledAt: "2026-07-20T00:00:00Z",
+          lastIncrementalAt: null,
+          reconcileMilliseconds: 300000
+        });
       }
       if (url.startsWith("/api/documents?type=person")) {
         return jsonResponse([
@@ -370,6 +415,19 @@ beforeEach(() => {
           data: { ...owedTodo, status: owedTodoStatus },
           body: "# 准备发布计划\n\n来自群聊上下文。",
           etag: "1"
+        });
+      }
+      if (url.startsWith("/api/documents/todo_candidate_frontend")) {
+        return jsonResponse({
+          path: "todos/items/todo_candidate_frontend.md",
+          data: {
+            ...owedTodo,
+            id: "todo_candidate_frontend",
+            title: "确认上线检查项",
+            candidate_id: "candidate_frontend"
+          },
+          body: "# 确认上线检查项\n\n已确认依据",
+          etag: "accepted-etag"
         });
       }
       if (url.startsWith("/api/documents/person_alice")) {
@@ -467,13 +525,19 @@ describe("Context Space workbench", () => {
     await user.click(
       screen.getByRole("button", { name: "确认 确认上线检查项" })
     );
-    expect(await screen.findByText("Inbox 已清空")).toBeInTheDocument();
-    expect(screen.queryByText("确认上线检查项")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/documents/todo_candidate_frontend"),
+        expect.anything()
+      );
+    });
     expect(fetch).toHaveBeenCalledWith(
-      "/api/inbox/candidate_frontend/confirm",
+      "/api/candidates/candidate_frontend/accept",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ etag: "candidate-etag" })
+        headers: expect.objectContaining({
+          "x-context-space-csrf": "frontend-csrf-token"
+        })
       })
     );
   });

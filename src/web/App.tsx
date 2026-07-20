@@ -39,6 +39,7 @@ import {
 } from "react-router-dom";
 import type {
   BaseMetadata,
+  KnowledgeMetadata,
   LeaderConfig,
   LoopReadiness,
   Overview,
@@ -56,6 +57,13 @@ import type {
   AnalysisStatusMetadata,
   ProviderAvailability
 } from "../analysis/contracts";
+import type {
+  AcceptanceOperation,
+  AnalysisJob,
+  AnalysisJobStatus,
+  MarkdownDiagnostic,
+  StoredCandidate
+} from "../machine";
 import { EMPTY_SYNC_STATUS } from "../core/types";
 import { api } from "./api";
 import { useApi } from "./hooks";
@@ -65,7 +73,7 @@ interface ApiDocument<T extends BaseMetadata = BaseMetadata> extends WorkspaceDo
   provenanceSources?: Array<{
     id: string;
     title: string;
-    body: string;
+    body: string | null;
     occurred_at: string;
     source_kind: SourceMetadata["source_kind"];
   }>;
@@ -80,12 +88,38 @@ interface ApiDocument<T extends BaseMetadata = BaseMetadata> extends WorkspaceDo
     waitingOnThem: TodoMetadata[];
     shared: TodoMetadata[];
   };
+  pendingInsights?: ReviewCandidate[];
+  acceptedInsights?: Array<{
+    id: string;
+    title: string;
+    path: string;
+    observations: PersonMetadata["observations"];
+  }>;
+  backlinks?: BaseMetadata[];
+}
+
+type AnalysisQueueCounts = Record<AnalysisJobStatus, number>;
+
+interface OverviewResponse extends Overview {
+  analysisQueue: AnalysisQueueCounts;
+}
+
+interface MarkdownSyncStatus {
+  watcherRunning: boolean;
+  lastReconciledAt: string | null;
+  lastIncrementalAt: string | null;
+  reconcileMilliseconds: number;
+}
+
+interface ReviewCandidate extends StoredCandidate {
+  acceptance: AcceptanceOperation | null;
 }
 
 const emptyOverview: Overview = {
   topTodos: [],
   upcomingCalendar: [],
   recentMentions: [],
+  upstreamTasks: [],
   waitingItems: [],
   reviewCandidates: [],
   knowledgeChanges: [],
@@ -97,6 +131,14 @@ const emptyOverview: Overview = {
   },
   syncStatus: EMPTY_SYNC_STATUS,
   counts: { todos: 0, people: 0, knowledge: 0, inbox: 0 }
+};
+
+const emptyAnalysisQueue: AnalysisQueueCounts = {
+  queued: 0,
+  leased: 0,
+  succeeded: 0,
+  failed_retryable: 0,
+  failed_terminal: 0
 };
 
 const navigation = [
@@ -520,7 +562,7 @@ function ProvenanceSource({
 }: {
   source: NonNullable<ApiDocument["provenanceSources"]>[number];
 }) {
-  const excerpt = source.body
+  const excerpt = (source.body ?? "")
     .replace(/^# .*\n+/u, "")
     .replace(/\*\*Participants:\*\*.*\n?/u, "")
     .replace(/\*\*Occurred:\*\*.*\n?/u, "")
@@ -540,21 +582,45 @@ function ProvenanceSource({
 }
 
 function NowPage() {
-  const { data, loading, error } = useApi<Overview>("/api/overview", emptyOverview);
+  const { data, loading, error } = useApi<OverviewResponse>("/api/overview", {
+    ...emptyOverview,
+    analysisQueue: emptyAnalysisQueue
+  });
   const today = new Intl.DateTimeFormat("zh-CN", {
     month: "long",
     day: "numeric",
     weekday: "long"
   }).format(new Date());
+  const [summaryMessage, setSummaryMessage] = useState("");
+
+  async function createDailySummary() {
+    try {
+      const summary = await api<ApiDocument<KnowledgeMetadata>>(
+        "/api/summaries/daily",
+        { method: "POST" }
+      );
+      setSummaryMessage(`已保存 ${summary.data.title}`);
+    } catch (error) {
+      setSummaryMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
   return (
     <>
       <PageHeader
         eyebrow={today}
         title="现在，先做重要的事。"
         description="从消息、日程和任务中汇总出的当前工作上下文。"
-        action={<Link className="primary-button" to="/inbox"><Sparkles size={17} />查看待确认</Link>}
+        action={
+          <div className="page-actions">
+            <button className="secondary-button" onClick={() => void createDailySummary()} type="button">
+              <FileText size={17} />保存今日摘要
+            </button>
+            <Link className="primary-button" to="/inbox"><Sparkles size={17} />查看待确认</Link>
+          </div>
+        }
       />
       <ErrorBanner message={error} />
+      {summaryMessage && <div className="info-banner">{summaryMessage}</div>}
       <div className="stats-grid">
         <StatCard label="开放 Todo" value={data.counts.todos} icon={ListTodo} tone="coral" />
         <StatCard label="协作人物" value={data.counts.people} icon={Users} tone="mint" />
@@ -585,7 +651,11 @@ function NowPage() {
               <div>
                 <small>LOOP READINESS</small>
                 <strong>自动执行尚未启用</strong>
-                <p>{data.loopReadiness.confirmationRequired.length} 项未来需要确认</p>
+                <p>
+                  排队 {data.analysisQueue.queued} · 运行 {data.analysisQueue.leased}
+                  {" · "}重试 {data.analysisQueue.failed_retryable}
+                  {" · "}失败 {data.analysisQueue.failed_terminal}
+                </p>
               </div>
             </div>
             <ChevronRight size={18} />
@@ -594,6 +664,9 @@ function NowPage() {
       </div>
 
       <div className="three-column">
+        <Section title="飞书任务" subtitle="SQLite 上游数据（只读）">
+          {data.upstreamTasks.length ? data.upstreamTasks.map((source) => <SourceRow key={source.id} source={source} />) : <EmptyState icon={ListTodo} title="没有上游任务" description="同步到的未完成飞书任务会显示在这里。" />}
+        </Section>
         <Section title="@ 我" subtitle="最近的群聊触达">
           {data.recentMentions.length ? data.recentMentions.map((source) => <SourceRow key={source.id} source={source} />) : <EmptyState title="没有新消息" description="新的群聊 @ 我会显示在这里。" />}
         </Section>
@@ -614,23 +687,32 @@ function NowPage() {
 }
 
 function InboxPage() {
-  const { data, loading, error, reload } = useApi<ApiDocument[]>("/api/documents?type=candidate", []);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const { data, loading, error, reload } = useApi<ReviewCandidate[]>("/api/candidates", []);
+  const [acting, setActing] = useState<string | null>(null);
   const [confirmError, setConfirmError] = useState("");
 
-  async function confirmCandidate(document: ApiDocument) {
-    setConfirming(document.data.id);
+  async function reviewCandidate(
+    candidate: ReviewCandidate,
+    action: "accept" | "reject"
+  ) {
+    setActing(candidate.id);
     setConfirmError("");
     try {
-      await api(`/api/inbox/${encodeURIComponent(document.data.id)}/confirm`, {
-        method: "POST",
-        body: JSON.stringify({ etag: document.etag })
-      });
-      await reload();
+      const result = await api<AcceptanceOperation>(
+        `/api/candidates/${encodeURIComponent(candidate.id)}/${action}`,
+        { method: "POST" }
+      );
+      if (action === "accept" && result.documentId) {
+        navigate(`/documents/${encodeURIComponent(result.documentId)}`);
+      } else {
+        await reload();
+      }
     } catch (caught) {
       setConfirmError(caught instanceof Error ? caught.message : String(caught));
+      await reload();
     } finally {
-      setConfirming(null);
+      setActing(null);
     }
   }
 
@@ -639,35 +721,65 @@ function InboxPage() {
       <PageHeader eyebrow="Review queue" title="Inbox" description="不确定的 Todo 和知识先在这里等待确认，而不是直接污染事实。" />
       <ErrorBanner message={error ?? confirmError} />
       <div className="document-grid">
-        {data.map((document) => (
-          <article className="document-card" key={document.data.id}>
-            <Link className="document-card-link" to={`/documents/${encodeURIComponent(document.data.id)}`}>
+        {data.map((candidate) => (
+          <article className="document-card" key={candidate.id}>
+            <Link className="document-card-link" to={`/documents/${encodeURIComponent(candidate.id)}`}>
               <div className="document-card-top">
-                <Badge tone="amber">{document.data.status === "candidate" ? "Todo 候选" : "知识草稿"}</Badge>
-                {typeof document.data.confidence === "number" && (
-                  <span>
-                    {document.data.analysis ? `${document.data.analysis.provider} · ` : ""}
-                    {Math.round(document.data.confidence * 100)}% confidence
-                  </span>
+                <Badge tone="amber">
+                  {candidate.kind === "todo"
+                    ? "Todo 候选"
+                    : candidate.kind === "knowledge"
+                      ? "知识候选"
+                      : "人物洞察"}
+                </Badge>
+                <span>{Math.round(candidate.confidence * 100)}% confidence</span>
+                {candidate.acceptance && (
+                  <Badge
+                    tone={
+                      candidate.acceptance.state === "conflict"
+                        ? "coral"
+                        : "blue"
+                    }
+                  >
+                    {candidate.acceptance.state}
+                  </Badge>
                 )}
               </div>
-              <h3>{document.data.title}</h3>
-              <p>{document.body || "等待人工检查来源和上下文。"}</p>
+              <h3>{candidate.title}</h3>
+              <p>{candidate.reason || "等待人工检查来源和上下文。"}</p>
+              <small>
+                {candidate.provider} · {candidate.promptVersion} ·{" "}
+                {formatDate(candidate.analyzedAt)}
+              </small>
             </Link>
             <div className="document-card-foot">
-              <span>{document.data.source_refs.length} 个来源</span>
-              <Link aria-label={`查看 ${document.data.title}`} to={`/documents/${encodeURIComponent(document.data.id)}`}>
+              <span>{candidate.sourceRefs.length} 个来源 · {candidate.evidence.length} 条证据</span>
+              <Link aria-label={`查看 ${candidate.title}`} to={`/documents/${encodeURIComponent(candidate.id)}`}>
                 <ChevronRight size={16} />
               </Link>
               <button
-                aria-label={`确认 ${document.data.title}`}
+                aria-label={`拒绝 ${candidate.title}`}
+                className="secondary-button"
+                disabled={acting === candidate.id}
+                onClick={() => void reviewCandidate(candidate, "reject")}
+                type="button"
+              >
+                <X size={14} />
+                拒绝
+              </button>
+              <button
+                aria-label={`确认 ${candidate.title}`}
                 className="confirm-candidate"
-                disabled={confirming === document.data.id}
-                onClick={() => void confirmCandidate(document)}
+                disabled={acting === candidate.id}
+                onClick={() => void reviewCandidate(candidate, "accept")}
                 type="button"
               >
                 <Check size={14} />
-                {confirming === document.data.id ? "确认中…" : "确认"}
+                {acting === candidate.id
+                  ? "处理中…"
+                  : candidate.status === "pending"
+                    ? "恢复接受"
+                    : "确认"}
               </button>
             </div>
           </article>
@@ -953,6 +1065,7 @@ interface ConfigResponse {
   leaders: LeaderConfig[];
   lark: { status: SyncStatus; readOnly: boolean; identity: string };
   loop: { enabled: boolean; executionEndpoint: null };
+  retention: { source_body_days: number };
   analysis: {
     current_provider: string;
     config_source: "workspace" | "environment";
@@ -962,6 +1075,8 @@ interface ConfigResponse {
     prompt_version: string;
     schema_version: string;
     status: AnalysisStatusMetadata;
+    queue: AnalysisQueueCounts;
+    failed_jobs: AnalysisJob[];
     recent_runs: AnalysisRunMetadata[];
   };
 }
@@ -971,6 +1086,7 @@ function SettingsPage() {
     leaders: [],
     lark: { status: EMPTY_SYNC_STATUS, readOnly: true, identity: "user" },
     loop: { enabled: false, executionEndpoint: null },
+    retention: { source_body_days: 90 },
     analysis: {
       current_provider: "codex-sdk",
       config_source: "workspace",
@@ -1006,6 +1122,8 @@ function SettingsPage() {
         last_error_code: null,
         last_error_message: null
       },
+      queue: emptyAnalysisQueue,
+      failed_jobs: [],
       recent_runs: []
     }
   });
@@ -1018,9 +1136,21 @@ function SettingsPage() {
     EMPTY_SYNC_STATUS
   );
   const people = useApi<ApiDocument<PersonMetadata>[]>("/api/documents?type=person", []);
+  const diagnostics = useApi<MarkdownDiagnostic[]>(
+    "/api/markdown/diagnostics",
+    []
+  );
+  const markdownStatus = useApi<MarkdownSyncStatus>("/api/markdown/status", {
+    watcherRunning: false,
+    lastReconciledAt: null,
+    lastIncrementalAt: null,
+    reconcileMilliseconds: 5 * 60 * 1000
+  });
   const [syncing, setSyncing] = useState(false);
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
+  const [savingRetention, setSavingRetention] = useState(false);
+  const [retryingJob, setRetryingJob] = useState<string | null>(null);
   const [leaderQuery, setLeaderQuery] = useState("");
   const [updatingLeader, setUpdatingLeader] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -1142,10 +1272,46 @@ function SettingsPage() {
     }
   }
 
+  async function retryAnalysisJob(jobId: string) {
+    setRetryingJob(jobId);
+    setMessage("");
+    try {
+      await api(`/api/analysis/jobs/${encodeURIComponent(jobId)}/retry`, {
+        method: "POST"
+      });
+      setMessage("分析任务已重新排队。");
+      await config.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRetryingJob(null);
+    }
+  }
+
+  async function saveRetention(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingRetention(true);
+    setMessage("");
+    const raw = new FormData(event.currentTarget).get("source_body_days");
+    const days = Number(raw);
+    try {
+      await api("/api/config/retention", {
+        method: "PUT",
+        body: JSON.stringify({ source_body_days: days })
+      });
+      setMessage(`原始来源正文将保留 ${days} 天。`);
+      await config.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingRetention(false);
+    }
+  }
+
   return (
     <>
-      <PageHeader eyebrow="Local control" title="Settings" description="数据源、Leader、同步和安全边界都由本地 Markdown 配置。" />
-      <ErrorBanner message={config.error ?? people.error ?? syncStatusError} />
+      <PageHeader eyebrow="Local control" title="Settings" description="人工内容由 Markdown 管理；同步、分析和审核状态保存在本机 SQLite。" />
+      <ErrorBanner message={config.error ?? people.error ?? diagnostics.error ?? markdownStatus.error ?? syncStatusError} />
       {message && <div className="info-banner">{message}</div>}
       <div className="settings-grid">
         <Section title="Lark source" subtitle="仅用户身份、只读命令">
@@ -1254,10 +1420,28 @@ function SettingsPage() {
             ))}
           </div>
           <div className="sync-summary analysis-summary">
-            <div><span>最近状态</span><strong>{config.data.analysis.status.last_status ?? "尚未运行"}</strong></div>
-            <div><span>最近 Provider</span><strong>{config.data.analysis.status.last_provider ?? "—"}</strong></div>
-            <div><span>完成时间</span><strong>{formatDate(config.data.analysis.status.last_completed_at)}</strong></div>
+            <div><span>排队</span><strong>{config.data.analysis.queue.queued}</strong></div>
+            <div><span>运行中</span><strong>{config.data.analysis.queue.leased}</strong></div>
+            <div><span>等待重试</span><strong>{config.data.analysis.queue.failed_retryable}</strong></div>
+            <div><span>失败终态</span><strong>{config.data.analysis.queue.failed_terminal}</strong></div>
           </div>
+          {config.data.analysis.failed_jobs.map((job) => (
+            <div className="setting-row" key={job.id}>
+              <div className="setting-icon"><AlertTriangle size={19} /></div>
+              <div>
+                <strong>{job.lastErrorCode ?? "分析失败"}</strong>
+                <span>{job.lastErrorMessage ?? job.id}</span>
+              </div>
+              <button
+                className="secondary-button"
+                disabled={retryingJob === job.id}
+                onClick={() => void retryAnalysisJob(job.id)}
+                type="button"
+              >
+                {retryingJob === job.id ? "重试中…" : "重新排队"}
+              </button>
+            </div>
+          ))}
           <div className="sync-summary analysis-summary">
             <div><span>当前模型</span><strong>{config.data.analysis.config.model ?? "Codex 默认"}</strong></div>
             <div><span>每批记录</span><strong>{config.data.analysis.config.max_batch_records}</strong></div>
@@ -1282,6 +1466,34 @@ function SettingsPage() {
             <div><CheckCircle2 size={16} />运行历史不伪造</div>
             <div><CheckCircle2 size={16} />外部动作不可达</div>
           </div>
+        </Section>
+
+        <Section title="数据保留" subtitle="原始来源正文">
+          <form className="model-control" onSubmit={saveRetention}>
+            <label className="provider-control">
+              <span>保留天数（1–3650）</span>
+              <input
+                key={config.data.retention.source_body_days}
+                aria-label="来源正文保留天数"
+                defaultValue={config.data.retention.source_body_days}
+                max={3650}
+                min={1}
+                name="source_body_days"
+                required
+                type="number"
+              />
+            </label>
+            <button
+              className="secondary-button"
+              disabled={savingRetention}
+              type="submit"
+            >
+              {savingRetention ? "保存中…" : "保存保留期"}
+            </button>
+          </form>
+          <p className="muted-copy">
+            到期后删除正文，但保留来源 ID、时间、参与者、正文哈希和审计元数据；待审核证据会延迟清理。
+          </p>
         </Section>
 
         <Section title="Priority people" subtitle="只有你能指定 Leader">
@@ -1357,10 +1569,28 @@ function SettingsPage() {
 
         <Section title="Markdown workspace" subtitle="Canonical source of truth">
           <div className="workspace-code">CONTEXT_SPACE_ROOT=./workspace</div>
+          <div className="sync-summary">
+            <div><span>文件监听</span><strong>{markdownStatus.data.watcherRunning ? "运行中" : "未启动"}</strong></div>
+            <div><span>最近全量校准</span><strong>{formatDate(markdownStatus.data.lastReconciledAt)}</strong></div>
+            <div><span>最近增量更新</span><strong>{formatDate(markdownStatus.data.lastIncrementalAt)}</strong></div>
+          </div>
           <p className="muted-copy">索引可以随时删除并从 Markdown 重建。`workspace/` 默认不会进入 Git。</p>
           <button className="secondary-button" onClick={async () => { await api("/api/index/rebuild", { method: "POST" }); setMessage("索引已从 Markdown 重建。"); }}>
             <RefreshCw size={16} />重建索引
           </button>
+          {diagnostics.data.length > 0 && (
+            <div className="policy-list">
+              {diagnostics.data.map((diagnostic) => (
+                <div key={diagnostic.path}>
+                  <AlertTriangle size={16} />
+                  {diagnostic.path}：{diagnostic.message}
+                </div>
+              ))}
+            </div>
+          )}
+          {!diagnostics.loading && diagnostics.data.length === 0 && (
+            <p className="muted-copy">Markdown 诊断正常，没有隔离文件。</p>
+          )}
         </Section>
       </div>
     </>
@@ -1408,7 +1638,7 @@ function DocumentPage() {
     try {
       await api(endpoint, {
         method: "PUT",
-        body: JSON.stringify({ etag: document.etag, data: document.data, body })
+        body: JSON.stringify({ etag: document.etag, body })
       });
       setEditing(false);
       await resource.reload();
@@ -1524,6 +1754,40 @@ function DocumentPage() {
               </div>
             </Section>
           )}
+          {person && Boolean(document.pendingInsights?.length) && (
+            <Section title="待审核洞察" subtitle="SQLite 候选 · 尚未写入人物备注">
+              <div className="observation-list">
+                {document.pendingInsights!.map((insight) => (
+                  <article className="observation" key={insight.id}>
+                    <div className="observation-head">
+                      <Badge tone="amber">{insight.status}</Badge>
+                      <span>{Math.round(insight.confidence * 100)}%</span>
+                    </div>
+                    <strong>{String(insight.data.text ?? insight.title)}</strong>
+                    <Link className="text-link" to="/inbox">前往 Inbox 审核</Link>
+                  </article>
+                ))}
+              </div>
+            </Section>
+          )}
+          {person && Boolean(document.acceptedInsights?.length) && (
+            <Section title="已接受洞察" subtitle="独立人工 Markdown 备注">
+              <div className="observation-list">
+                {document.acceptedInsights!.map((insight) => (
+                  <Link
+                    className="provenance-source"
+                    key={insight.id}
+                    to={`/documents/${encodeURIComponent(insight.id)}`}
+                  >
+                    <span>
+                      <strong>{insight.title}</strong>
+                      <small>{insight.observations.length} 条观察</small>
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </Section>
+          )}
           <Section title="Provenance">
             <div className="source-refs">
               {person
@@ -1574,6 +1838,21 @@ function DocumentPage() {
               </div>
             )}
           </Section>
+          {Boolean(document.backlinks?.length) && (
+            <Section title="Backlinks" subtitle="引用当前稳定 ID 的上下文">
+              <div className="source-refs">
+                {document.backlinks!.map((backlink) => (
+                  <Link
+                    className="text-link"
+                    key={backlink.id}
+                    to={`/documents/${encodeURIComponent(backlink.id)}`}
+                  >
+                    {backlink.title} · {backlink.type}
+                  </Link>
+                ))}
+              </div>
+            </Section>
+          )}
         </div>
       </div>
     </>

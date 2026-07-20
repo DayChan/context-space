@@ -2,14 +2,11 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AnalysisConfigService } from "../src/analysis/config";
-import { AnalysisCoordinator } from "../src/analysis/coordinator";
 import type {
   AnalysisProvider,
   ProviderAnalysisRequest,
   ProviderAnalysisResponse
 } from "../src/analysis/contracts";
-import { AnalysisProviderRegistry } from "../src/analysis/providers/registry";
 import { LarkAdapter } from "../src/adapters/lark/adapter";
 import {
   normalizeMessages,
@@ -32,6 +29,38 @@ import {
   type Logger,
   type LoggingConfig
 } from "../src/logging";
+import { DEFAULT_ANALYSIS_CONFIG } from "../src/analysis/config";
+import {
+  AnalysisJobRepository,
+  MachineContextRepository,
+  SyncRepository,
+  openMachineDatabase,
+  type MachineDatabase
+} from "../src/machine";
+
+const testDatabases: MachineDatabase[] = [];
+
+async function createTestSync(
+  root: string,
+  adapter: LarkAdapter,
+  logger?: Logger
+): Promise<LarkSyncService> {
+  const database = await openMachineDatabase(root);
+  testDatabases.push(database);
+  return new LarkSyncService(
+    database,
+    new MachineContextRepository(database),
+    new SyncRepository(database),
+    new AnalysisJobRepository(database),
+    adapter,
+    async () => ({
+      analysis: DEFAULT_ANALYSIS_CONFIG,
+      timezone: "Asia/Singapore",
+      currentUserId: "self"
+    }),
+    logger
+  );
+}
 
 function memoryLogger(root: string): {
   logger: Logger;
@@ -114,21 +143,6 @@ class FakeAnalysisProvider implements AnalysisProvider {
       eventTypes: ["agent_message"]
     };
   }
-}
-
-function createAnalysis(
-  store: Awaited<ReturnType<typeof initializeWorkspace>>,
-  index: ContextIndex,
-  provider: AnalysisProvider = new FakeAnalysisProvider(),
-  logger?: Logger
-): AnalysisCoordinator {
-  return new AnalysisCoordinator(
-    store,
-    index,
-    new AnalysisProviderRegistry([provider]),
-    new AnalysisConfigService(store, {}),
-    logger
-  );
 }
 
 class FakeRunner implements CommandRunner {
@@ -237,6 +251,7 @@ describe("read-only Lark adapter", () => {
   });
 
   afterEach(async () => {
+    for (const database of testDatabases.splice(0)) database.close();
     await rm(root, { recursive: true, force: true });
   });
 
@@ -313,11 +328,9 @@ describe("read-only Lark adapter", () => {
     await index.rebuild(store);
     const logs = memoryLogger(root);
     const runner = new PaginatedP2PRunner(41);
-    const sync = new LarkSyncService(
-      store,
-      index,
+    const sync = await createTestSync(
+      root,
       new LarkAdapter(runner),
-      createAnalysis(store, index, undefined, logs.logger),
       logs.logger
     );
 
@@ -334,7 +347,11 @@ describe("read-only Lark adapter", () => {
     expect(p2pCalls).toHaveLength(41);
     expect(p2pCalls.every((args) => !args.includes("--page-all"))).toBe(true);
     expect(p2pCalls.every((args) => args.includes("--no-reactions"))).toBe(true);
-    expect(index.search("", "source").filter(({ id }) => id.startsWith("lark:message:om_p2p_"))).toHaveLength(41);
+    expect(
+      new MachineContextRepository(testDatabases.at(-1)!).listSources({
+        kinds: ["p2p"]
+      })
+    ).toHaveLength(41);
     await logs.logger.flush();
     expect(logs.entries).toContainEqual(
       expect.objectContaining({
@@ -351,12 +368,9 @@ describe("read-only Lark adapter", () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
-    const analysis = createAnalysis(store, index);
-    const failedSync = new LarkSyncService(
-      store,
-      index,
-      new LarkAdapter(new PaginatedP2PRunner(3, 1)),
-      analysis
+    const failedSync = await createTestSync(
+      root,
+      new LarkAdapter(new PaginatedP2PRunner(3, 1))
     );
     const options = {
       now: new Date("2026-07-20T12:00:00Z"),
@@ -371,17 +385,18 @@ describe("read-only Lark adapter", () => {
       received: 1,
       persisted: 1
     });
-    expect(index.byId("lark:message:om_p2p_0")).toBeDefined();
-    const failedCheckpoint = await store.read(".context/sync/lark.md");
     expect(
-      (failedCheckpoint.data.source_checkpoints as Record<string, unknown>).p2p
-    ).toBeUndefined();
+      new MachineContextRepository(testDatabases.at(-1)!).getSource(
+        "lark:message:om_p2p_0"
+      )
+    ).not.toBeNull();
+    expect(
+      new SyncRepository(testDatabases.at(-1)!).getCursor("p2p")
+    ).toBeNull();
 
-    const replayedSync = new LarkSyncService(
-      store,
-      index,
-      new LarkAdapter(new PaginatedP2PRunner(3)),
-      analysis
+    const replayedSync = await createTestSync(
+      root,
+      new LarkAdapter(new PaginatedP2PRunner(3))
     );
     const replayed = await replayedSync.sync(options);
     expect(replayed.results.find(({ source }) => source === "p2p")).toMatchObject({
@@ -390,14 +405,13 @@ describe("read-only Lark adapter", () => {
       persisted: 2
     });
     expect(
-      index
-        .search("", "source")
-        .filter(({ id }) => id.startsWith("lark:message:om_p2p_"))
+      new MachineContextRepository(testDatabases.at(-1)!).listSources({
+        kinds: ["p2p"]
+      })
     ).toHaveLength(3);
-    const completedCheckpoint = await store.read(".context/sync/lark.md");
     expect(
-      (completedCheckpoint.data.source_checkpoints as Record<string, unknown>).p2p
-    ).toBeDefined();
+      new SyncRepository(testDatabases.at(-1)!).getCursor("p2p")
+    ).not.toBeNull();
   });
 
   it("rejects missing, repeated, and over-limit P2P pagination without advancing checkpoints", async () => {
@@ -464,12 +478,7 @@ describe("read-only Lark adapter", () => {
           };
         }
       };
-      const sync = new LarkSyncService(
-        store,
-        index,
-        new LarkAdapter(runner),
-        createAnalysis(store, index)
-      );
+      const sync = await createTestSync(root, new LarkAdapter(runner));
 
       const status = await sync.sync({
         now: new Date("2026-07-20T12:00:00Z"),
@@ -482,11 +491,10 @@ describe("read-only Lark adapter", () => {
       expect(p2p?.error, testCase.name).toContain(testCase.error);
       expect(p2p?.persisted, testCase.name).toBe(testCase.expectedCalls);
       expect(p2pCalls, testCase.name).toBe(testCase.expectedCalls);
-      const checkpoint = await store.read(".context/sync/lark.md");
       expect(
-        (checkpoint.data.source_checkpoints as Record<string, unknown>).p2p,
+        new SyncRepository(testDatabases.at(-1)!).getCursor("p2p"),
         testCase.name
-      ).toBeUndefined();
+      ).toBeNull();
     }
   });
 
@@ -583,12 +591,7 @@ describe("read-only Lark adapter", () => {
         };
       }
     };
-    const sync = new LarkSyncService(
-      store,
-      index,
-      new LarkAdapter(runner),
-      createAnalysis(store, index, provider)
-    );
+    const sync = await createTestSync(root, new LarkAdapter(runner));
     const status = await sync.sync({
       now: new Date("2026-07-20T12:00:00Z"),
       backfillDays: 1,
@@ -606,15 +609,13 @@ describe("read-only Lark adapter", () => {
     expect(provider.calls).toHaveLength(0);
   });
 
-  it("preserves a locally completed native task across read-only sync", async () => {
+  it("keeps native tasks machine-owned and does not create Todo Markdown", async () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
-    const sync = new LarkSyncService(
-      store,
-      index,
-      new LarkAdapter(new FakeRunner()),
-      createAnalysis(store, index)
+    const sync = await createTestSync(
+      root,
+      new LarkAdapter(new FakeRunner())
     );
     const options = {
       now: new Date("2026-07-20T12:00:00Z"),
@@ -622,24 +623,13 @@ describe("read-only Lark adapter", () => {
       windowDays: 1
     };
     await sync.sync(options);
-    const nativeTodo = index
-      .all()
-      .find(
-        ({ data }) =>
-          data.type === "todo" &&
-          (data as { upstream?: string }).upstream === "lark_task"
-      );
-    expect(nativeTodo).toBeDefined();
-    await store.write(
-      nativeTodo!.path,
-      { ...nativeTodo!.data, status: "done" },
-      nativeTodo!.body,
-      { expectedEtag: nativeTodo!.etag }
-    );
-    await index.rebuild(store);
-
+    const machine = new MachineContextRepository(testDatabases.at(-1)!);
+    expect(machine.countUpstreamTasks()).toBe(1);
+    expect(
+      index.all().some(({ data }) => data.type === "todo")
+    ).toBe(false);
     await sync.sync(options);
-    expect(index.byId(nativeTodo!.data.id)?.data.status).toBe("done");
+    expect(machine.countUpstreamTasks()).toBe(1);
   });
 
   it("exposes in-flight synchronization progress", async () => {
@@ -664,12 +654,7 @@ describe("read-only Lark adapter", () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
-    const sync = new LarkSyncService(
-      store,
-      index,
-      new LarkAdapter(runner),
-      createAnalysis(store, index)
-    );
+    const sync = await createTestSync(root, new LarkAdapter(runner));
     const running = sync.sync({
       now: new Date("2026-07-20T12:00:00Z"),
       backfillDays: 1,
@@ -689,7 +674,7 @@ describe("read-only Lark adapter", () => {
     const completed = await running;
     expect(completed.progress).toMatchObject({
       phase: "completed",
-      message: "同步已完成"
+      message: "同步已完成，分析任务已加入队列"
     });
   });
 
@@ -863,13 +848,9 @@ describe("read-only Lark adapter", () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
-    const provider = new FakeAnalysisProvider();
-    const analysis = createAnalysis(store, index, provider);
-    const first = new LarkSyncService(
-      store,
-      index,
-      new LarkAdapter(new FakeRunner()),
-      analysis
+    const first = await createTestSync(
+      root,
+      new LarkAdapter(new FakeRunner())
     );
     const clock = new Date("2026-07-20T12:00:00Z");
     const firstStatus = await first.sync({
@@ -879,25 +860,23 @@ describe("read-only Lark adapter", () => {
       overlapMinutes: 10
     });
     expect(firstStatus.results.every((result) => result.ok)).toBe(true);
-    expect(provider.calls).toHaveLength(1);
-    expect(provider.calls[0].prompt).toContain("lark:message:om_mention");
-    expect(provider.calls[0].prompt).toContain("lark:message:om_p2p");
-    const sourceCount = index.search("", "source").length;
+    const machine = new MachineContextRepository(testDatabases.at(-1)!);
+    const queue = new AnalysisJobRepository(testDatabases.at(-1)!);
+    expect(queue.counts().queued).toBe(2);
+    const sourceCount = machine.listSources().length;
     const secondStatus = await first.sync({
       now: new Date("2026-07-20T12:05:00Z"),
       backfillDays: 1,
       windowDays: 1,
       overlapMinutes: 10
     });
-    expect(index.search("", "source")).toHaveLength(sourceCount);
+    expect(machine.listSources()).toHaveLength(sourceCount);
     expect(secondStatus.results.find((result) => result.source === "mentions")?.persisted).toBe(0);
-    expect(provider.calls).toHaveLength(1);
+    expect(queue.counts().queued).toBe(2);
 
-    const partial = new LarkSyncService(
-      store,
-      index,
-      new LarkAdapter(new FakeRunner(true)),
-      analysis
+    const partial = await createTestSync(
+      root,
+      new LarkAdapter(new FakeRunner(true))
     );
     const partialStatus = await partial.sync({
       now: new Date("2026-07-20T12:10:00Z"),
@@ -906,27 +885,19 @@ describe("read-only Lark adapter", () => {
     });
     expect(partialStatus.results.find((result) => result.source === "calendar")?.ok).toBe(false);
     expect(partialStatus.results.find((result) => result.source === "tasks")?.ok).toBe(true);
-    const checkpoint = await store.read(".context/sync/lark.md");
     expect(
-      (checkpoint.data.source_checkpoints as Record<string, unknown>).tasks
-    ).toBeDefined();
+      new SyncRepository(testDatabases.at(-1)!).getCursor("tasks")
+    ).not.toBeNull();
   });
 
-  it("advances source checkpoints when LLM analysis fails", async () => {
+  it("advances source cursors before asynchronous analysis executes", async () => {
     const store = await initializeWorkspace(root);
     const index = new ContextIndex();
     await index.rebuild(store);
     const logs = memoryLogger(root);
-    const sync = new LarkSyncService(
-      store,
-      index,
+    const sync = await createTestSync(
+      root,
       new LarkAdapter(new FakeRunner()),
-      createAnalysis(
-        store,
-        index,
-        new FakeAnalysisProvider(true),
-        logs.logger
-      ),
       logs.logger
     );
     const status = await sync.sync({
@@ -938,39 +909,31 @@ describe("read-only Lark adapter", () => {
     const mentions = status.results.find((result) => result.source === "mentions");
     expect(mentions?.ok).toBe(true);
     expect(mentions?.persisted).toBeGreaterThan(0);
-    expect(mentions?.analysis_failed).toBeGreaterThan(0);
-    const checkpoint = await store.read(".context/sync/lark.md");
     expect(
-      (checkpoint.data.source_checkpoints as Record<string, unknown>).mentions
-    ).toBeDefined();
-    expect(index.byId("lark:message:om_mention")).toBeDefined();
+      new SyncRepository(testDatabases.at(-1)!).getCursor("mentions")
+    ).not.toBeNull();
+    expect(
+      new MachineContextRepository(testDatabases.at(-1)!).getSource(
+        "lark:message:om_mention"
+      )
+    ).not.toBeNull();
+    expect(
+      new AnalysisJobRepository(testDatabases.at(-1)!).counts().queued
+    ).toBe(2);
     await logs.logger.flush();
     const syncIds = logs.entries
       .filter(({ event }) =>
         [
           "lark.sync.started",
           "lark.sync.source.completed",
-          "analysis.batch.failed",
           "lark.sync.completed"
         ].includes(String(event))
       )
       .map(({ sync_id }) => sync_id);
     expect(new Set(syncIds).size).toBe(1);
-    expect(logs.entries).toContainEqual(
-      expect.objectContaining({
-        event: "analysis.batch.failed",
-        error_code: "provider_failed",
-        sync_id: syncIds[0],
-        run_id: expect.any(String)
-      })
-    );
-    expect(logs.entries).toContainEqual(
-      expect.objectContaining({
-        event: "lark.sync.analysis.completed",
-        failed: 2,
-        sync_id: syncIds[0]
-      })
-    );
+    expect(
+      logs.entries.some(({ event }) => event === "analysis.batch.failed")
+    ).toBe(false);
     expect(JSON.stringify(logs.entries)).not.toContain("请你跟进设计");
   });
 
@@ -996,11 +959,9 @@ describe("read-only Lark adapter", () => {
     const index = new ContextIndex();
     await index.rebuild(store);
     const logs = memoryLogger(root);
-    const sync = new LarkSyncService(
-      store,
-      index,
+    const sync = await createTestSync(
+      root,
       new LarkAdapter(runner),
-      createAnalysis(store, index, undefined, logs.logger),
       logs.logger
     );
 
@@ -1017,9 +978,11 @@ describe("read-only Lark adapter", () => {
     });
     expect(status.last_error).toContain("需要人工处理");
 
-    const persisted = await store.read(".context/sync/lark-status.md");
-    const results = persisted.data.results as unknown as Array<{ issue?: { kind?: string } }>;
-    expect(results.find((result) => result.issue)?.issue?.kind).toBe("permission");
+    expect(
+      new SyncRepository(testDatabases.at(-1)!)
+        .latestRun()
+        ?.results.find((result) => result.issue)?.issue?.kind
+    ).toBe("permission");
     await logs.logger.flush();
     expect(logs.entries).toContainEqual(
       expect.objectContaining({
