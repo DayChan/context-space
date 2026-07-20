@@ -1,0 +1,31 @@
+src/core/overview.ts
+  s_9a2d24a49d1051::t_75899c2582c1a8 100-104
+src/server/app.ts
+  s_9a2d24a49d1051::t_56ef8dc24b6863 78-82,516-531
+src/web/App.tsx
+  s_9a2d24a49d1051::t_52098c20c2eb49 843-852,854-861,864,867,870,876-900
+src/web/styles.css
+  s_9a2d24a49d1051::t_48ad6333a0ceaa 222-224,232
+tests/api.test.ts
+  s_9a2d24a49d1051::t_d5dc53355ea0a4 109-172
+tests/frontend.test.tsx
+  s_9a2d24a49d1051::t_3490fb401fa44c 169-178,320-334,437-452
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "649f3adb65ef268a7ccfb73ad78db2e43e81fdb0",
+  "prompts": {},
+  "sessions": {
+    "s_9a2d24a49d1051": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7eeb-f0ad-7c62-81f3-0abdc39b8d39",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
