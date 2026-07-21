@@ -1,0 +1,29 @@
+src/core/markdown-index-sync.ts
+  s_da68a5f8d51828::t_d6bde6d19a54a1 3,11-15,32,38-41,108-112,118,124
+src/machine/agent-repository.ts
+  s_da68a5f8d51828::t_3d18c8689820c6 34,152-157,363-367,369-370,372-373
+src/machine/migrations.ts
+  s_da68a5f8d51828::t_b44b982a7059db 419-437
+tests/machine-database.test.ts
+  s_da68a5f8d51828::t_8b3f91f95b182d 4,7,71-125
+tests/markdown-index-sync.test.ts
+  s_da68a5f8d51828::t_3e134ff62c2f59 30-35,191-200,202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dc4a03543fda552a5a08bbb0f8c0338df975c0b6",
+  "prompts": {},
+  "sessions": {
+    "s_da68a5f8d51828": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f84e3-01fe-7ca2-888d-08eea3d05b24",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
