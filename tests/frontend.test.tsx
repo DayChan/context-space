@@ -8,6 +8,7 @@ import type {
   LeaderConfig,
   Overview,
   PersonMetadata,
+  SourceMetadata,
   SyncStatus,
   TodoMetadata
 } from "../src/core/types";
@@ -184,14 +185,27 @@ const overview: Overview = {
   counts: { todos: 2, people: 1, knowledge: 0, inbox: 0 }
 };
 
-const timelineItems: TodoMetadata[] = Array.from(
+const timelineItems: SourceMetadata[] = Array.from(
   { length: 21 },
-  (_, index) => ({
-    ...owedTodo,
-    id: `timeline_item_${index + 1}`,
-    title: `Timeline item ${index + 1}`,
-    updated_at: `2026-07-${String(20 - Math.floor(index / 2)).padStart(2, "0")}T${String(23 - (index % 2)).padStart(2, "0")}:00:00Z`
-  })
+  (_, index) => {
+    const occurredAt = `2026-07-${String(20 - Math.floor(index / 2)).padStart(2, "0")}T${String(23 - (index % 2)).padStart(2, "0")}:00:00Z`;
+    return {
+      schema: "work-context/source@1",
+      id: `timeline_item_${index + 1}`,
+      type: "source",
+      title: `Timeline item ${index + 1}`,
+      managed: "generated",
+      created_at: occurredAt,
+      updated_at: occurredAt,
+      source_refs: [],
+      provider: "lark",
+      source_kind: "calendar",
+      source_id: `lark:calendar:timeline_item_${index + 1}`,
+      occurred_at: occurredAt,
+      participants: [],
+      provider_metadata: {}
+    };
+  }
 );
 
 function jsonResponse(payload: unknown, status = 200): Promise<Response> {
@@ -650,11 +664,12 @@ describe("Context Space workbench", () => {
     expect(screen.queryByText("Bob")).not.toBeInTheDocument();
   });
 
-  it("paginates Timeline and gives the time column enough structure", async () => {
+  it("paginates calendar-only Timeline and gives the time column enough structure", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/timeline"]}><AppView /></MemoryRouter>);
     const firstItem = await screen.findByText("Timeline item 1");
     expect(screen.queryByText("Timeline item 21")).not.toBeInTheDocument();
+    expect(screen.getAllByText("日历")).toHaveLength(20);
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument();
     expect(
       firstItem.closest(".timeline-item")?.firstElementChild

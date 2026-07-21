@@ -98,14 +98,13 @@ export function buildOverview(
   };
 }
 
-export function buildTimeline(documents: WorkspaceDocument[]): BaseMetadata[] {
+export function buildTimeline(documents: WorkspaceDocument[]): SourceMetadata[] {
   return documents
-    .filter((document) => ["source", "todo", "candidate", "knowledge"].includes(document.data.type))
     .filter(
-      (document) =>
-        document.data.type !== "source" ||
-        (document.data as SourceMetadata).source_kind !== "p2p"
+      (document): document is WorkspaceDocument<SourceMetadata> =>
+        document.data.type === "source" &&
+        (document.data as SourceMetadata).source_kind === "calendar"
     )
     .map((document) => document.data)
-    .sort(byUpdatedDescending);
+    .sort((left, right) => right.occurred_at.localeCompare(left.occurred_at));
 }

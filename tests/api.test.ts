@@ -155,7 +155,7 @@ describe("local API", () => {
       .expect(404);
   });
 
-  it("paginates Timeline and excludes P2P direct messages", async () => {
+  it("shows only calendar sources in Timeline", async () => {
     context.runtime.machineContext.upsertSource(
       machineSource(
         "lark:message:timeline_p2p",
@@ -163,6 +163,15 @@ describe("local API", () => {
         "2026-07-20T03:00:00.000Z",
         "# Direct message",
         "Direct message"
+      )
+    );
+    context.runtime.machineContext.upsertSource(
+      machineSource(
+        "lark:calendar:timeline_event",
+        "calendar",
+        "2026-07-20T04:00:00.000Z",
+        "# Calendar event",
+        "Calendar event"
       )
     );
     context.runtime.machineContext.upsertSource(
@@ -191,19 +200,17 @@ describe("local API", () => {
     expect(firstPage.body.pagination).toEqual({
       page: 1,
       page_size: 1,
-      total: 2,
-      total_pages: 2
+      total: 1,
+      total_pages: 1
     });
     expect(firstPage.body.items).toHaveLength(1);
-    expect(firstPage.body.items[0].id).toBe("lark:message:timeline_mention");
-    expect(
-      JSON.stringify(firstPage.body)
-    ).not.toContain("timeline_p2p");
-
-    const secondPage = await request(context.app)
-      .get("/api/timeline?page=2&page_size=1")
-      .expect(200);
-    expect(secondPage.body.items[0].id).toBe("timeline_todo");
+    expect(firstPage.body.items[0]).toMatchObject({
+      id: "lark:calendar:timeline_event",
+      source_kind: "calendar"
+    });
+    expect(JSON.stringify(firstPage.body)).not.toContain("timeline_p2p");
+    expect(JSON.stringify(firstPage.body)).not.toContain("timeline_mention");
+    expect(JSON.stringify(firstPage.body)).not.toContain("timeline_todo");
   });
 
   it("uses optimistic concurrency for editable documents", async () => {

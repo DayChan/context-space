@@ -974,7 +974,7 @@ function KnowledgePage() {
 }
 
 interface TimelineResponse {
-  items: BaseMetadata[];
+  items: SourceMetadata[];
   pagination: {
     page: number;
     page_size: number;
@@ -994,14 +994,14 @@ function TimelinePage() {
   );
   return (
     <>
-      <PageHeader eyebrow="Source of truth" title="Timeline" description="从群聊上下文到派生知识，按更新时间查看可追溯链路。" />
+      <PageHeader eyebrow="Calendar" title="Timeline" description="只展示日历事件，并按发生时间倒序排列。" />
       <ErrorBanner message={error} />
       <div className="timeline">
         {data.items.map((item) => (
           <Link key={item.id} className="timeline-item" to={`/documents/${encodeURIComponent(item.id)}`}>
-            <div className="timeline-time">{formatDate(item.updated_at)}</div>
-            <span className={`timeline-dot type-${item.type}`} />
-            <div className="timeline-content"><Badge>{item.type}</Badge><strong>{item.title}</strong><small>{item.source_refs.length} source refs</small></div>
+            <div className="timeline-time">{formatDate(item.occurred_at)}</div>
+            <span className="timeline-dot type-calendar" />
+            <div className="timeline-content"><Badge>日历</Badge><strong>{item.title}</strong><small>{item.provider}</small></div>
             <ChevronRight size={16} />
           </Link>
         ))}
@@ -1030,7 +1030,7 @@ function TimelinePage() {
           </button>
         </div>
       )}
-      {!data.items.length && <EmptyState icon={Activity} title={loading ? "正在加载…" : "还没有时间线"} description="同步后的群聊来源与派生内容会按时间串联。" />}
+      {!data.items.length && <EmptyState icon={CalendarDays} title={loading ? "正在加载…" : "还没有日历事件"} description="同步后的日历事件会按发生时间显示在这里。" />}
     </>
   );
 }
