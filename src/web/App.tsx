@@ -79,9 +79,12 @@ interface ApiDocument<T extends BaseMetadata = BaseMetadata> extends WorkspaceDo
     occurred_at: string;
     source_kind: SourceMetadata["source_kind"];
     body_purged_at?: string | null;
+    conversation: {
+      type: "direct" | "group";
+      name: string;
+    } | null;
     sender: {
       person_id: string;
-      external_id: string;
       display_name: string;
     } | null;
   }>;
@@ -578,7 +581,11 @@ function ProvenanceSource({
     <article className="provenance-source">
       <span>
         <Link to={`/documents/${encodeURIComponent(source.id)}`}>
-          <strong>{source.title}</strong>
+          <strong>
+            {source.conversation
+              ? `${source.conversation.type === "direct" ? "私聊" : "群聊"} · ${source.conversation.name}`
+              : source.title}
+          </strong>
         </Link>
         <small>{source.provider} · {source.source_kind} · {formatDate(source.occurred_at)}</small>
       </span>
@@ -588,7 +595,6 @@ function ProvenanceSource({
           <Link to={`/documents/${encodeURIComponent(source.sender.person_id)}`}>
             {source.sender.display_name}
           </Link>
-          <code>{source.sender.external_id}</code>
         </div>
       )}
       <code>{source.id}</code>

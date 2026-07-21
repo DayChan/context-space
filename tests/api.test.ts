@@ -253,14 +253,17 @@ describe("local API", () => {
   it("publishes Todo directly and requires confirmation for durable knowledge", async () => {
     const timestamp = "2026-07-20T00:00:00.000Z";
     context.runtime.machineContext.upsertSource(
-      machineSource(
-        "lark:message:decision",
-        "mention",
-        timestamp,
-        "需要确认发布计划，并记录发布决策",
-        "发布群",
-        [{ provider_id: "ou_sender", name: "发送者", role: "sender" }]
-      )
+      {
+        ...machineSource(
+          "lark:message:decision",
+          "mention",
+          timestamp,
+          "需要确认发布计划，并记录发布决策",
+          "发布群",
+          [{ provider_id: "ou_sender", name: "发送者", role: "sender" }]
+        ),
+        metadata: { chat_name: "发布群" }
+      }
     );
     context.runtime.analysisJobs.enqueue({
       id: "job_api_candidates",
@@ -427,9 +430,9 @@ describe("local API", () => {
         body: expect.stringContaining("需要确认发布计划"),
         sender: {
           person_id: personIdForIdentity("lark", "ou_sender"),
-          external_id: "ou_sender",
           display_name: "发送者"
-        }
+        },
+        conversation: { type: "group", name: "发布群" }
       })
     ]);
     const inboxDetail = await request(context.app)
@@ -498,7 +501,7 @@ describe("local API", () => {
     const newerSource: SourceMetadata = {
       ...source,
       id: "lark:message:person_api_newer",
-      title: "后续讨论",
+      title: "Direct message",
       source_id: "lark:message:person_api_newer",
       occurred_at: "2026-07-20T01:00:00.000Z"
     };
@@ -542,7 +545,13 @@ describe("local API", () => {
         newerSource.occurred_at,
         "# 后续讨论\n\nAlice 确认了新的排期",
         newerSource.title,
-        [{ provider_id: "ou_alice", name: "Alice", role: "sender" }]
+        [
+          {
+            provider_id: "ou_alice",
+            name: "ou_alice",
+            role: "partner"
+          }
+        ]
       )
     );
     await context.runtime.store.write("people/person_api.md", person, "# Alice");
@@ -569,12 +578,10 @@ describe("local API", () => {
     expect(firstPage.body.provenanceSources).toEqual([
       expect.objectContaining({
         id: newerSource.id,
-        title: "后续讨论",
+        title: "Direct message",
         body: expect.stringContaining("新的排期"),
-        sender: expect.objectContaining({
-          person_id: personIdForIdentity("lark", "ou_alice"),
-          display_name: "Alice"
-        })
+        sender: null,
+        conversation: { type: "direct", name: "Alice" }
       })
     ]);
 
@@ -585,7 +592,8 @@ describe("local API", () => {
       expect.objectContaining({
         id: source.id,
         title: "发布讨论",
-        body: expect.stringContaining("汇总阻塞项")
+        body: expect.stringContaining("汇总阻塞项"),
+        conversation: { type: "direct", name: "Direct message" }
       })
     ]);
   });

@@ -132,9 +132,9 @@ const personProvenanceSources = Array.from({ length: 11 }, (_, index) => {
       body: "# Alice\n\n**Occurred:** 2026-07-20T02:00:00Z\n\nAlice 会在评审前汇总阻塞项",
       occurred_at: "2026-07-20T02:00:00Z",
       source_kind: "p2p",
+      conversation: { type: "direct" as const, name: "Alice" },
       sender: {
         person_id: "person_sender_private",
-        external_id: "ou_private",
         display_name: "私聊发送者"
       }
     };
@@ -147,9 +147,9 @@ const personProvenanceSources = Array.from({ length: 11 }, (_, index) => {
       body: "# 发布评审群\n\n**Occurred:** 2026-07-20T01:30:00Z\n\nAlice 负责发布流程",
       occurred_at: "2026-07-20T01:30:00Z",
       source_kind: "mention",
+      conversation: { type: "group" as const, name: "发布评审群" },
       sender: {
         person_id: "person_sender_group",
-        external_id: "ou_group",
         display_name: "群聊发送者"
       }
     };
@@ -161,6 +161,7 @@ const personProvenanceSources = Array.from({ length: 11 }, (_, index) => {
     body: `# 历史讨论 ${index}\n\n第 ${index} 条历史消息`,
     occurred_at: `2026-07-${String(20 - index).padStart(2, "0")}T00:00:00Z`,
     source_kind: "p2p",
+    conversation: { type: "direct" as const, name: `历史讨论 ${index}` },
     sender: null
   };
 });
@@ -487,9 +488,9 @@ beforeEach(() => {
               body: "# 发布计划讨论\n\n请在周五前准备发布计划",
               occurred_at: "2026-07-20T01:00:00Z",
               source_kind: "mention",
+              conversation: { type: "group", name: "发布计划讨论" },
               sender: {
                 person_id: "person_sender_todo",
-                external_id: "ou_todo_sender",
                 display_name: "Alice"
               }
             }
@@ -528,9 +529,9 @@ beforeEach(() => {
               body: "上线前确认检查项",
               occurred_at: "2026-07-20T01:00:00Z",
               source_kind: "mention",
+              conversation: { type: "group", name: "上线讨论" },
               sender: {
                 person_id: "person_sender_frontend",
-                external_id: "ou_frontend_sender",
                 display_name: "Alice"
               }
             }
@@ -572,9 +573,9 @@ beforeEach(() => {
               body: "上线前确认检查项",
               occurred_at: "2026-07-20T01:00:00Z",
               source_kind: "mention",
+              conversation: { type: "group", name: "上线讨论" },
               sender: {
                 person_id: "person_sender_frontend",
-                external_id: "ou_frontend_sender",
                 display_name: "Alice"
               }
             }
@@ -707,7 +708,7 @@ describe("Context Space workbench", () => {
 
   it("shows source content on an Inbox candidate detail", async () => {
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/documents/candidate_frontend"]}><AppView /></MemoryRouter>);
-    expect(await screen.findByText("上线讨论")).toBeInTheDocument();
+    expect(await screen.findByText("群聊 · 上线讨论")).toBeInTheDocument();
     expect(screen.getAllByText("上线前确认检查项").length).toBeGreaterThan(0);
     expect(screen.getByText("lark:message:frontend")).toBeInTheDocument();
   });
@@ -734,11 +735,11 @@ describe("Context Space workbench", () => {
   it("shows provenance and disabled automation on Todo detail", async () => {
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/documents/todo_owed"]}><AppView /></MemoryRouter>);
     expect(await screen.findByText("lark:message:om_1")).toBeInTheDocument();
-    expect(screen.getByText("发布计划讨论")).toBeInTheDocument();
+    expect(screen.getByText("群聊 · 发布计划讨论")).toBeInTheDocument();
     expect(screen.getByText("请在周五前准备发布计划")).toBeInTheDocument();
     expect(screen.getByText(/lark · mention/)).toBeInTheDocument();
     expect(screen.getByText("Alice")).toBeInTheDocument();
-    expect(screen.getByText("ou_todo_sender")).toBeInTheDocument();
+    expect(screen.queryByText("ou_todo_sender")).not.toBeInTheDocument();
     expect(screen.getByText("外部执行不可用")).toBeInTheDocument();
     expect(screen.getByText("需要人工确认")).toBeInTheDocument();
     expect(screen.getByText("codex-sdk")).toBeInTheDocument();
@@ -753,14 +754,15 @@ describe("Context Space workbench", () => {
     expect(screen.getByText("在关键评审前主动汇总阻塞项。")).toBeInTheDocument();
     expect(screen.getAllByText("Alice 会在评审前汇总阻塞项").length).toBeGreaterThan(0);
     expect(screen.getByText(/86%/)).toBeInTheDocument();
-    expect(screen.getAllByText("发布评审群").length).toBeGreaterThan(0);
+    expect(screen.getByText("群聊 · 发布评审群")).toBeInTheDocument();
     expect(screen.getByText("私聊发送者")).toBeInTheDocument();
     expect(screen.getByText("群聊发送者")).toBeInTheDocument();
+    expect(screen.getByText("私聊 · Alice")).toBeInTheDocument();
     expect(screen.getAllByText("Alice 负责发布流程").length).toBeGreaterThan(0);
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "下一页 Provenance" }));
-    expect(await screen.findByText("历史讨论 10")).toBeInTheDocument();
-    expect(screen.queryByText("发布评审群")).not.toBeInTheDocument();
+    expect(await screen.findByText("私聊 · 历史讨论 10")).toBeInTheDocument();
+    expect(screen.queryByText("群聊 · 发布评审群")).not.toBeInTheDocument();
     expect(screen.getByText(/第 2 \/ 2 页/)).toBeInTheDocument();
   });
 

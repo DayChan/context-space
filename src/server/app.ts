@@ -109,6 +109,49 @@ const UNKNOWN_SENDER_NAMES = new Set([
   "Direct message partner"
 ]);
 
+function sourceMetadataString(
+  metadata: Record<string, unknown>,
+  key: string
+): string | null {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function sourceConversation(source: {
+  provider: string;
+  kind: string;
+  metadata: Record<string, unknown>;
+  participants: Array<{
+    provider_id: string;
+    name: string;
+    role?: string;
+  }>;
+}, resolveIdentityName: (provider: string, externalId: string) => string | null): {
+  type: "direct" | "group";
+  name: string;
+} | null {
+  if (source.kind !== "p2p" && source.kind !== "mention") return null;
+  const type = source.kind === "p2p" ? "direct" : "group";
+  const chatName = sourceMetadataString(source.metadata, "chat_name");
+  if (type === "group") {
+    return { type, name: chatName ?? "Group mention" };
+  }
+  const partner = source.participants.find(({ role }) => role === "partner");
+  const resolvedPartnerName = partner
+    ? resolveIdentityName(source.provider, partner.provider_id)
+    : null;
+  const partnerName =
+    partner?.name &&
+    partner.name !== partner.provider_id &&
+    !UNKNOWN_SENDER_NAMES.has(partner.name)
+      ? partner.name
+      : null;
+  return {
+    type,
+    name: resolvedPartnerName ?? partnerName ?? chatName ?? "Direct message"
+  };
+}
+
 const timelinePaginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(20)
@@ -329,13 +372,20 @@ async function apiDocument(
                 source.provider,
                 sender.provider_id
               ),
-              external_id: sender.provider_id,
               display_name:
                 sender.name && !UNKNOWN_SENDER_NAMES.has(sender.name)
                   ? sender.name
-                  : sender.provider_id
+                  : "未知发送人"
             };
           })(),
+          conversation: sourceConversation(
+            source,
+            (provider, externalId) =>
+              runtime.machineContext.displayNameForIdentity(
+                provider,
+                externalId
+              )
+          ),
           id: source.id,
           provider: source.provider,
           title: source.title,

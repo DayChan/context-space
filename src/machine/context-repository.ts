@@ -390,6 +390,18 @@ export class MachineContextRepository {
     ).count;
   }
 
+  displayNameForIdentity(provider: string, externalId: string): string | null {
+    const row = this.database.connection
+      .prepare(
+        `SELECT display_name
+         FROM upstream_people
+         WHERE provider = ? AND external_id = ?`
+      )
+      .get(provider, externalId) as { display_name: string | null } | undefined;
+    const name = row?.display_name?.trim();
+    return name && name !== externalId ? name : null;
+  }
+
   listUpstreamPeople(): StoredUpstreamPerson[] {
     return (
       this.database.connection
