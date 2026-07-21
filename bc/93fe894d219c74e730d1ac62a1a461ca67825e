@@ -1,0 +1,43 @@
+.env.example
+  s_da68a5f8d51828::t_067964e27885d7 13
+README.md
+  s_da68a5f8d51828::t_954432ae5987ee 70,72,80-81
+src/adapters/lark/runner.ts
+  s_da68a5f8d51828::t_b5aa271fe1ea8b 41-57,157,262-263
+src/adapters/lark/sync.ts
+  s_da68a5f8d51828::t_30f4608ade3203 24,486
+src/adapters/meego/runner.ts
+  s_da68a5f8d51828::t_36851d61d98652 40-47,148-153
+src/core/types.ts
+  s_da68a5f8d51828::t_19c250acec676a 200
+src/core/workspace.ts
+  s_da68a5f8d51828::t_44cd70aeb68391 61
+src/web/App.tsx
+  s_da68a5f8d51828::t_5d1caa2ad96720 367-369
+tests/core.test.ts
+  s_da68a5f8d51828::t_6513d6b44471f1 40
+tests/frontend.test.tsx
+  s_da68a5f8d51828::t_765aa4d8c96a56 1499-1544
+tests/lark.test.ts
+  s_da68a5f8d51828::t_41116a879b9cd6 320,328,336,339,344,884-906
+tests/meego.test.ts
+  s_da68a5f8d51828::t_d1b25447e8667b 8,274-297
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bc93fe894d219c74e730d1ac62a1a461ca67825e",
+  "prompts": {},
+  "sessions": {
+    "s_da68a5f8d51828": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f84e3-01fe-7ca2-888d-08eea3d05b24",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
