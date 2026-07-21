@@ -416,6 +416,25 @@ export const MACHINE_MIGRATIONS: readonly MachineMigration[] = [
         ADD COLUMN workflow_kind TEXT NOT NULL DEFAULT 'direct'
         CHECK(workflow_kind IN ('direct', 'openspec'));
     `
+  },
+  {
+    version: 7,
+    name: "agent-message-sequence",
+    sql: `
+      ALTER TABLE agent_messages
+        ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0;
+
+      UPDATE agent_messages AS target
+      SET sequence = (
+        SELECT COUNT(*)
+        FROM agent_messages AS preceding
+        WHERE preceding.session_id = target.session_id
+          AND preceding.rowid <= target.rowid
+      );
+
+      CREATE UNIQUE INDEX agent_messages_session_sequence_idx
+        ON agent_messages(session_id, sequence);
+    `
   }
 ];
 

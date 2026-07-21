@@ -27,7 +27,12 @@ describe("Markdown schema and SQLite index", () => {
     store = await initializeHumanWorkspace(root);
     database = await openMachineDatabase(root);
     repository = new MarkdownIndexRepository(database);
-    synchronization = new MarkdownIndexSync(store, repository);
+    synchronization = new MarkdownIndexSync(
+      store,
+      repository,
+      new MarkdownSchemaRegistry(),
+      { watcher: { usePolling: true, interval: 25 } }
+    );
   });
 
   afterEach(async () => {
@@ -183,9 +188,18 @@ describe("Markdown schema and SQLite index", () => {
     );
   });
 
-  it("observes external file saves through the watcher", async () => {
-    await synchronization.reconcile();
+  it("closes the startup gap and observes external file saves through the watcher", async () => {
+    await store.write(
+      "todos/items/before-start.md",
+      createTodoMetadata({
+        id: "before-start",
+        title: "Before start",
+        managed: "manual"
+      }),
+      "# Before start"
+    );
     await synchronization.start();
+    expect(repository.byId("before-start")?.data.title).toBe("Before start");
     await store.write(
       "todos/items/watched.md",
       createTodoMetadata({

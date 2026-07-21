@@ -1,12 +1,17 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import chokidar, { type FSWatcher } from "chokidar";
+import chokidar, { type ChokidarOptions, type FSWatcher } from "chokidar";
 import { MarkdownIndexRepository } from "../machine/markdown-index-repository";
 import { listMarkdownFiles } from "./workspace";
 import { MarkdownStore } from "./markdown-store";
 import { MarkdownSchemaRegistry } from "./markdown-schema";
 
 const HUMAN_ROOTS = ["todos/items", "people", "knowledge"] as const;
+
+export interface MarkdownIndexSyncOptions {
+  reconcileMilliseconds?: number;
+  watcher?: Pick<ChokidarOptions, "interval" | "usePolling">;
+}
 
 export async function listHumanMarkdownFiles(root: string): Promise<string[]> {
   const all = await listMarkdownFiles(root);
@@ -22,16 +27,18 @@ export async function listHumanMarkdownFiles(root: string): Promise<string[]> {
 export class MarkdownIndexSync {
   private watcher: FSWatcher | null = null;
   private interval: NodeJS.Timeout | null = null;
-  private readonly pending = new Map<string, NodeJS.Timeout>();
   private lastReconciledAt: string | null = null;
   private lastIncrementalAt: string | null = null;
+  private readonly reconcileMilliseconds: number;
 
   constructor(
     private readonly store: MarkdownStore,
     private readonly repository: MarkdownIndexRepository,
     private readonly registry = new MarkdownSchemaRegistry(),
-    private readonly reconcileMilliseconds = 5 * 60 * 1_000
-  ) {}
+    private readonly options: MarkdownIndexSyncOptions = {}
+  ) {
+    this.reconcileMilliseconds = options.reconcileMilliseconds ?? 5 * 60 * 1_000;
+  }
 
   async reconcile(): Promise<number> {
     const files = await listHumanMarkdownFiles(this.store.root);
@@ -98,32 +105,28 @@ export class MarkdownIndexSync {
     if (this.watcher) return;
     this.watcher = chokidar.watch(
       HUMAN_ROOTS.map((root) => path.join(this.store.root, root)),
-      { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 150 } }
+      {
+        ignoreInitial: true,
+        awaitWriteFinish: { stabilityThreshold: 150 },
+        ...this.options.watcher
+      }
     );
     const schedule = (absolutePath: string) => {
       const relativePath = path
         .relative(this.store.root, absolutePath)
         .replaceAll(path.sep, "/");
-      const previous = this.pending.get(relativePath);
-      if (previous) clearTimeout(previous);
-      const timer = setTimeout(() => {
-        this.pending.delete(relativePath);
-        void this.refreshPath(relativePath);
-      }, 50);
-      timer.unref();
-      this.pending.set(relativePath, timer);
+      void this.refreshPath(relativePath);
     };
     this.watcher.on("add", schedule).on("change", schedule).on("unlink", schedule);
     await new Promise<void>((resolve, reject) => {
       this.watcher!.once("ready", resolve).once("error", reject);
     });
+    await this.reconcile();
     this.interval = setInterval(() => void this.reconcile(), this.reconcileMilliseconds);
     this.interval.unref();
   }
 
   async stop(): Promise<void> {
-    for (const timer of this.pending.values()) clearTimeout(timer);
-    this.pending.clear();
     if (this.interval) clearInterval(this.interval);
     this.interval = null;
     await this.watcher?.close();

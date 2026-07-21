@@ -31,7 +31,7 @@ interface SessionRow {
 }
 interface MessageRow {
   id: string; session_id: string; turn_id: string | null;
-  role: AgentMessage["role"]; content: string; created_at: string;
+  role: AgentMessage["role"]; content: string; created_at: string; sequence: number;
 }
 interface TurnRow {
   id: string; session_id: string; input_message_id: string; status: AgentTurn["status"];
@@ -149,7 +149,12 @@ export class AgentRepositoryStore {
 
   nextQueuedTurn(sessionId: string): AgentTurn | null {
     const row = this.database.connection.prepare(
-      "SELECT * FROM agent_turns WHERE session_id = ? AND status = 'queued' ORDER BY created_at LIMIT 1"
+      `SELECT turn.*
+       FROM agent_turns AS turn
+       JOIN agent_messages AS input ON input.id = turn.input_message_id
+       WHERE turn.session_id = ? AND turn.status = 'queued'
+       ORDER BY input.sequence
+       LIMIT 1`
     ).get(sessionId) as TurnRow | undefined;
     return row ? this.hydrateTurn(row) : null;
   }
@@ -355,12 +360,17 @@ export class AgentRepositoryStore {
   }
 
   private insertMessage(message: AgentMessage): void {
+    const sequence = (
+      this.database.connection.prepare(
+        "SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM agent_messages WHERE session_id = ?"
+      ).get(message.sessionId) as { value: number }
+    ).value;
     this.database.connection.prepare(
-      "INSERT INTO agent_messages(id, session_id, turn_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(message.id, message.sessionId, message.turnId, message.role, message.content, message.createdAt);
+      "INSERT INTO agent_messages(id, session_id, turn_id, role, content, created_at, sequence) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(message.id, message.sessionId, message.turnId, message.role, message.content, message.createdAt, sequence);
   }
-  private listMessages(id: string): AgentMessage[] { return (this.database.connection.prepare("SELECT * FROM agent_messages WHERE session_id = ? ORDER BY created_at, id").all(id) as MessageRow[]).map((r) => this.hydrateMessage(r)); }
-  private listTurns(id: string): AgentTurn[] { return (this.database.connection.prepare("SELECT * FROM agent_turns WHERE session_id = ? ORDER BY created_at, id").all(id) as TurnRow[]).map((r) => this.hydrateTurn(r)); }
+  private listMessages(id: string): AgentMessage[] { return (this.database.connection.prepare("SELECT * FROM agent_messages WHERE session_id = ? ORDER BY sequence").all(id) as MessageRow[]).map((r) => this.hydrateMessage(r)); }
+  private listTurns(id: string): AgentTurn[] { return (this.database.connection.prepare(`SELECT turn.* FROM agent_turns AS turn JOIN agent_messages AS input ON input.id = turn.input_message_id WHERE turn.session_id = ? ORDER BY input.sequence`).all(id) as TurnRow[]).map((r) => this.hydrateTurn(r)); }
   private listEvents(id: string): AgentEvent[] { return (this.database.connection.prepare("SELECT * FROM agent_events WHERE session_id = ? ORDER BY sequence DESC LIMIT 200").all(id) as EventRow[]).reverse().map((r) => this.hydrateEvent(r)); }
   private listConfirmations(id: string): AgentConfirmation[] { return (this.database.connection.prepare("SELECT * FROM agent_confirmations WHERE session_id = ? ORDER BY created_at").all(id) as ConfirmationRow[]).map((r) => this.hydrateConfirmation(r)); }
   private hydrateRepository(r: RepositoryRow): AgentRepository { return { id: r.id, name: r.name, path: r.path, kind: r.kind, headCommit: r.head_commit || null, branch: r.branch, createdAt: r.created_at, updatedAt: r.updated_at }; }

@@ -1,8 +1,10 @@
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  applyMachineMigrations,
   MACHINE_DATABASE_RELATIVE_PATH,
   MACHINE_MIGRATIONS,
   openMachineDatabase
@@ -64,6 +66,61 @@ describe("MachineDatabase", () => {
       MACHINE_MIGRATIONS.map(({ version }) => ({ version, count: 1 }))
     );
     second.close();
+  });
+
+  it("backfills causal Agent message sequence when upgrading an existing database", () => {
+    const database = new Database(":memory:");
+    const agentMigration = MACHINE_MIGRATIONS.find(({ version }) => version === 4)!;
+    database.exec(agentMigration.sql);
+    database.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      )
+    `);
+    const markApplied = database.prepare(
+      "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)"
+    );
+    for (const migration of MACHINE_MIGRATIONS.filter(({ version }) => version < 7)) {
+      markApplied.run(migration.version, migration.name, "2026-07-21T00:00:00.000Z");
+    }
+    database.exec(`
+      INSERT INTO agent_repositories(
+        id, name, path, head_commit, branch, created_at, updated_at
+      ) VALUES (
+        'repo_existing', 'Existing', '/tmp/existing', '', NULL,
+        '2026-07-21T00:00:00.000Z', '2026-07-21T00:00:00.000Z'
+      );
+      INSERT INTO agent_sessions(
+        id, title, source_kind, source_id, repository_id, mode,
+        workspace_path, branch, base_commit, thread_id, status, attention,
+        workspace_lifecycle, created_at, updated_at, ended_at
+      ) VALUES (
+        'session_existing', 'Existing', 'todo', 'todo_existing',
+        'repo_existing', 'read_only', '/tmp/existing', NULL, '', NULL,
+        'active', 'none', 'ready', '2026-07-21T00:00:00.000Z',
+        '2026-07-21T00:00:00.000Z', NULL
+      );
+    `);
+    const insert = database.prepare(
+      `INSERT INTO agent_messages(id, session_id, turn_id, role, content, created_at)
+       VALUES (?, 'session_existing', NULL, ?, ?, '2026-07-21T00:00:00.000Z')`
+    );
+    insert.run("message_z", "user", "first");
+    insert.run("message_a", "assistant", "second");
+
+    applyMachineMigrations(database);
+
+    expect(
+      database.prepare(
+        "SELECT id, sequence FROM agent_messages ORDER BY sequence"
+      ).all()
+    ).toEqual([
+      { id: "message_z", sequence: 1 },
+      { id: "message_a", sequence: 2 }
+    ]);
+    database.close();
   });
 
   it("rolls back all writes when a transaction fails", async () => {
