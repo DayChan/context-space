@@ -688,6 +688,32 @@ describe("local API", () => {
     expect(after.body.progress.phase).toBe("completed");
   });
 
+  it("persists periodic read-only synchronization configuration", async () => {
+    const initial = await request(context.app).get("/api/config").expect(200);
+    expect(initial.body.lark.schedule.config).toEqual({
+      enabled: false,
+      interval: 1,
+      unit: "hours"
+    });
+
+    await authorized(
+      request(context.app).put("/api/config/lark-sync-schedule")
+    )
+      .send({ enabled: true, interval: 15, unit: "minutes" })
+      .expect(200);
+    const updated = await request(context.app).get("/api/config").expect(200);
+    expect(updated.body.lark.schedule.config).toEqual({
+      enabled: true,
+      interval: 15,
+      unit: "minutes"
+    });
+    await authorized(
+      request(context.app).put("/api/config/lark-sync-schedule")
+    )
+      .send({ enabled: true, interval: 169, unit: "hours" })
+      .expect(400);
+  });
+
   it("switches providers without making an analysis call", async () => {
     await authorized(request(context.app).put("/api/config/analysis"))
       .send({

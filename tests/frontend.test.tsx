@@ -205,6 +205,11 @@ let selectedProvider = "codex-sdk";
 let selectedModel: string | null = null;
 let selectedReasoningEffort: AnalysisConfig["reasoning_effort"] = "medium";
 let selectedWorkerCount = 1;
+let selectedSyncSchedule = {
+  enabled: false,
+  interval: 1,
+  unit: "hours" as "minutes" | "hours"
+};
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
 let owedTodoStatus: TodoMetadata["status"] = "open";
 let configuredLeaders: LeaderConfig[] = [];
@@ -213,7 +218,16 @@ let inboxCandidates: Array<StoredCandidate & { acceptance: null }> = [];
 function configResponse() {
   return {
     leaders: configuredLeaders,
-    lark: { status: larkStatus, readOnly: true, identity: "user" },
+    lark: {
+      status: larkStatus,
+      readOnly: true,
+      identity: "user",
+      schedule: {
+        config: selectedSyncSchedule,
+        running: true,
+        next_run_at: null
+      }
+    },
     loop: { enabled: false, executionEndpoint: null },
     retention: { source_body_days: 90 },
     analysis: {
@@ -277,6 +291,7 @@ beforeEach(() => {
   selectedModel = null;
   selectedReasoningEffort = "medium";
   selectedWorkerCount = 1;
+  selectedSyncSchedule = { enabled: false, interval: 1, unit: "hours" };
   larkStatus = EMPTY_SYNC_STATUS;
   owedTodoStatus = "open";
   configuredLeaders = [];
@@ -350,6 +365,16 @@ beforeEach(() => {
           String(init?.body ?? "[]")
         ) as LeaderConfig[];
         return jsonResponse(configuredLeaders);
+      }
+      if (url === "/api/config/lark-sync-schedule") {
+        selectedSyncSchedule = JSON.parse(
+          String(init?.body ?? "{}")
+        ) as typeof selectedSyncSchedule;
+        return jsonResponse({
+          config: selectedSyncSchedule,
+          running: true,
+          next_run_at: null
+        });
       }
       if (url.startsWith("/api/candidates/") && url.endsWith("/accept")) {
         const id = decodeURIComponent(url.split("/")[3]);
@@ -820,6 +845,34 @@ describe("Context Space workbench", () => {
       await screen.findByText("LLM Worker 已调整为 3；新并发度立即生效。")
     ).toBeInTheDocument();
     expect(selectedWorkerCount).toBe(3);
+  });
+
+  it("configures periodic read-only synchronization in minutes", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+
+    expect(await screen.findByText("定期同步当前已关闭；手动只读同步不受影响。")).toBeInTheDocument();
+    await user.selectOptions(
+      screen.getByLabelText("定期只读同步状态"),
+      "true"
+    );
+    const interval = screen.getByLabelText("定期同步周期");
+    await user.clear(interval);
+    await user.type(interval, "30");
+    await user.selectOptions(
+      screen.getByLabelText("定期同步周期单位"),
+      "minutes"
+    );
+    await user.click(screen.getByRole("button", { name: "保存定期同步" }));
+
+    expect(
+      await screen.findByText("已启用定期只读同步：每 30 分钟一次。")
+    ).toBeInTheDocument();
+    expect(selectedSyncSchedule).toEqual({
+      enabled: true,
+      interval: 30,
+      unit: "minutes"
+    });
   });
 
   it("searches, adds, lists, and removes Priority people", async () => {

@@ -694,6 +694,9 @@ describe("read-only Lark adapter", () => {
         page_index: 0
       }
     });
+    await expect(sync.sync()).rejects.toThrow(
+      "A Lark synchronization is already running"
+    );
     release();
     const completed = await running;
     expect(completed.progress).toMatchObject({

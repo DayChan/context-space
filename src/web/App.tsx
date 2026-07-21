@@ -1078,7 +1078,20 @@ function LoopPage() {
 
 interface ConfigResponse {
   leaders: LeaderConfig[];
-  lark: { status: SyncStatus; readOnly: boolean; identity: string };
+  lark: {
+    status: SyncStatus;
+    readOnly: boolean;
+    identity: string;
+    schedule: {
+      config: {
+        enabled: boolean;
+        interval: number;
+        unit: "minutes" | "hours";
+      };
+      running: boolean;
+      next_run_at: string | null;
+    };
+  };
   loop: { enabled: boolean; executionEndpoint: null };
   retention: { source_body_days: number };
   analysis: {
@@ -1102,7 +1115,16 @@ interface ConfigResponse {
 function SettingsPage() {
   const config = useApi<ConfigResponse>("/api/config", {
     leaders: [],
-    lark: { status: EMPTY_SYNC_STATUS, readOnly: true, identity: "user" },
+    lark: {
+      status: EMPTY_SYNC_STATUS,
+      readOnly: true,
+      identity: "user",
+      schedule: {
+        config: { enabled: false, interval: 1, unit: "hours" },
+        running: false,
+        next_run_at: null
+      }
+    },
     loop: { enabled: false, executionEndpoint: null },
     retention: { source_body_days: 90 },
     analysis: {
@@ -1174,6 +1196,7 @@ function SettingsPage() {
   const [savingReasoningEffort, setSavingReasoningEffort] = useState(false);
   const [savingWorkerCount, setSavingWorkerCount] = useState(false);
   const [savingRetention, setSavingRetention] = useState(false);
+  const [savingSyncSchedule, setSavingSyncSchedule] = useState(false);
   const [retryingJob, setRetryingJob] = useState<string | null>(null);
   const [leaderQuery, setLeaderQuery] = useState("");
   const [updatingLeader, setUpdatingLeader] = useState<string | null>(null);
@@ -1371,6 +1394,32 @@ function SettingsPage() {
     }
   }
 
+  async function saveSyncSchedule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingSyncSchedule(true);
+    setMessage("");
+    const form = new FormData(event.currentTarget);
+    const enabled = form.get("enabled") === "true";
+    const interval = Number(form.get("interval"));
+    const unit = form.get("unit");
+    try {
+      await api("/api/config/lark-sync-schedule", {
+        method: "PUT",
+        body: JSON.stringify({ enabled, interval, unit })
+      });
+      setMessage(
+        enabled
+          ? `已启用定期只读同步：每 ${interval} ${unit === "minutes" ? "分钟" : "小时"}一次。`
+          : "已关闭定期只读同步。"
+      );
+      await config.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingSyncSchedule(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Local control" title="Settings" description="人工内容由 Markdown 管理；同步、分析和审核状态保存在本机 SQLite。" />
@@ -1396,6 +1445,56 @@ function SettingsPage() {
             <RefreshCw className={syncing || liveStatus.running ? "spin" : ""} size={17} />
             {syncing || liveStatus.running ? "正在同步…" : "立即只读同步"}
           </button>
+          <form className="sync-schedule-control" onSubmit={saveSyncSchedule}>
+            <label className="provider-control">
+              <span>定期同步</span>
+              <select
+                aria-label="定期只读同步状态"
+                defaultValue={String(config.data.lark.schedule.config.enabled)}
+                key={String(config.data.lark.schedule.config.enabled)}
+                name="enabled"
+              >
+                <option value="false">关闭</option>
+                <option value="true">开启</option>
+              </select>
+            </label>
+            <label className="provider-control">
+              <span>周期</span>
+              <input
+                aria-label="定期同步周期"
+                defaultValue={config.data.lark.schedule.config.interval}
+                key={`${config.data.lark.schedule.config.interval}-${config.data.lark.schedule.config.unit}`}
+                min={1}
+                name="interval"
+                required
+                type="number"
+              />
+            </label>
+            <label className="provider-control">
+              <span>单位</span>
+              <select
+                aria-label="定期同步周期单位"
+                defaultValue={config.data.lark.schedule.config.unit}
+                key={config.data.lark.schedule.config.unit}
+                name="unit"
+              >
+                <option value="minutes">分钟</option>
+                <option value="hours">小时</option>
+              </select>
+            </label>
+            <button
+              className="secondary-button"
+              disabled={savingSyncSchedule}
+              type="submit"
+            >
+              {savingSyncSchedule ? "保存中…" : "保存定期同步"}
+            </button>
+          </form>
+          <p className="muted-copy">
+            {config.data.lark.schedule.config.enabled
+              ? `下次同步：${formatDate(config.data.lark.schedule.next_run_at)}。触发时若已有同步运行，本周期会跳过。`
+              : "定期同步当前已关闭；手动只读同步不受影响。"}
+          </p>
         </Section>
 
         <Section title="同步状态" subtitle="运行时进度与错误">

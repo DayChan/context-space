@@ -44,6 +44,7 @@ try {
     logger
   });
   runtime.analysisWorker.start();
+  runtime.syncScheduler.start();
   runtime.sourceRetention.start();
   await runtime.markdownIndexSync.start();
   const server = app.listen(port, host, () => {
@@ -65,6 +66,7 @@ try {
     timeout.unref();
     try {
       await closeServer(server);
+      runtime.syncScheduler.stop();
       await runtime.analysisWorker.stop();
       await runtime.markdownIndexSync.stop();
       runtime.sourceRetention.stop();

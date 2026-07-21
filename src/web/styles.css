@@ -301,6 +301,8 @@ a { color: inherit; text-decoration: none; }
 .provider-control select:disabled, .provider-control input:disabled { color: #8e8e8b; cursor: not-allowed; }
 .model-control { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 8px; }
 .model-control .secondary-button { margin-bottom: 0; }
+.sync-schedule-control { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr 1fr auto; align-items: end; gap: 8px; }
+.sync-schedule-control .secondary-button { min-height: 38px; }
 .provider-list { margin-top: 12px; display: grid; gap: 7px; }
 .provider-list > div { padding: 8px; display: flex; align-items: center; gap: 8px; border-radius: 8px; background: #f2f0ea; }
 .provider-list > div > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; }
@@ -429,4 +431,6 @@ a { color: inherit; text-decoration: none; }
   .timeline-time { display: none; }
   .timeline-content { grid-template-columns: auto 1fr; }
   .timeline-content small { display: none; }
+  .sync-schedule-control { grid-template-columns: 1fr 1fr; }
+  .sync-schedule-control .secondary-button { grid-column: 1 / -1; }
 }

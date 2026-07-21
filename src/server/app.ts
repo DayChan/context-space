@@ -28,6 +28,10 @@ import { ANALYSIS_SCHEMA_VERSION } from "../analysis/schema";
 import { LarkAdapter } from "../adapters/lark/adapter";
 import { LarkCliCommandRunner, type CommandRunner } from "../adapters/lark/runner";
 import { LarkSyncService } from "../adapters/lark/sync";
+import {
+  LarkSyncScheduleConfigService,
+  PeriodicLarkSyncScheduler
+} from "../adapters/lark/scheduler";
 import { ContextIndex } from "../core/index";
 import { MarkdownIndexSync } from "../core/markdown-index-sync";
 import {
@@ -132,6 +136,7 @@ export interface Runtime {
   database: MachineDatabase;
   machineContext: MachineContextRepository;
   sync: LarkSyncService;
+  syncScheduler: PeriodicLarkSyncScheduler;
   analysisJobs: AnalysisJobRepository;
   analysisResults: AnalysisResultRepository;
   markdownIndexRepository: MarkdownIndexRepository;
@@ -448,6 +453,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
     settings.set("leaders", parsed.success ? parsed.data : []);
   }
   const analysisConfig = new AnalysisConfigService(settings, environment);
+  const syncScheduleConfig = new LarkSyncScheduleConfigService(settings);
   const analysisWorkerConfig = new AnalysisWorkerConfigService(
     settings,
     environment
@@ -538,6 +544,11 @@ export async function createApp(options: CreateAppOptions): Promise<{
     logger
   );
   await sync.loadStatus();
+  const syncScheduler = new PeriodicLarkSyncScheduler(
+    sync,
+    syncScheduleConfig,
+    logger
+  );
 
   const runtime: Runtime = {
     store,
@@ -545,6 +556,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
     database,
     machineContext,
     sync,
+    syncScheduler,
     analysisJobs,
     analysisResults,
     markdownIndexRepository,
@@ -807,7 +819,8 @@ export async function createApp(options: CreateAppOptions): Promise<{
       lark: {
         status: sync.getStatus(),
         readOnly: true,
-        identity: "user"
+        identity: "user",
+        schedule: syncScheduler.status()
       },
       loop: {
         enabled: false,
@@ -889,6 +902,12 @@ export async function createApp(options: CreateAppOptions): Promise<{
       .parse(request.body);
     settings.setSourceRetentionDays(input.source_body_days);
     response.json(input);
+  });
+
+  app.put("/api/config/lark-sync-schedule", (request, response) => {
+    syncScheduleConfig.update(request.body);
+    syncScheduler.reschedule();
+    response.json(syncScheduler.status());
   });
 
   app.get("/api/analysis/status", async (_request, response) => {

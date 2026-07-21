@@ -115,11 +115,31 @@ export class LarkSyncService {
     if (this.status.running) {
       throw new Error("A Lark synchronization is already running");
     }
+    this.status = {
+      running: true,
+      started_at: nowIso(),
+      completed_at: null,
+      results: [],
+      last_error: null,
+      progress: {
+        phase: "collecting",
+        source: null,
+        window_index: null,
+        window_count: null,
+        page_index: null,
+        received: 0,
+        persisted: 0,
+        message: "正在准备飞书只读同步",
+        updated_at: nowIso()
+      }
+    };
     const syncId = `sync_${randomUUID()}`;
     return withLogContext({ sync_id: syncId }, async () => {
       const started = process.hrtime.bigint();
-      this.syncRepository.startRun(syncId);
+      let runStarted = false;
       try {
+        this.syncRepository.startRun(syncId);
+        runStarted = true;
         const status = await this.executeSync(syncId, options);
         this.syncRepository.finishRun(
           syncId,
@@ -129,7 +149,9 @@ export class LarkSyncService {
         return status;
       } catch (error) {
         const message = "飞书同步因未预期错误中止，请查看结构化日志。";
-        this.syncRepository.finishRun(syncId, "failed", message);
+        if (runStarted) {
+          this.syncRepository.finishRun(syncId, "failed", message);
+        }
         this.status = {
           ...this.status,
           running: false,

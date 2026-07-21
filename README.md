@@ -56,6 +56,15 @@ curl -X POST http://127.0.0.1:4318/api/sync/lark \
   -H "x-context-space-csrf: ${CSRF_TOKEN}"
 ```
 
+Settings 也可以启用按分钟或小时执行的定期只读同步。配置保存在 SQLite，服务启动或配置保存后开始重新计时；到点时若已有只读同步运行，本周期会被跳过，不并发执行也不补入队列。配置 API 示例：
+
+```bash
+curl -X PUT http://127.0.0.1:4318/api/config/lark-sync-schedule \
+  -H 'Content-Type: application/json' \
+  -H "x-context-space-csrf: ${CSRF_TOKEN}" \
+  -d '{"enabled":true,"interval":30,"unit":"minutes"}'
+```
+
 适配器读取群聊提及、P2P 消息、日程、任务和当前用户身份。同步使用检查点和重叠时间窗避免遗漏，并按来源记录失败，不修改飞书数据。
 
 消息窗口由应用逐页读取，每页最多 50 条，并在请求下一页前立即持久化；不会使用 `lark-cli --page-all` 把整个窗口聚合到单个 120 秒命令中。消息同步显式关闭未被业务使用的表情富化。若单页失败、下一页游标缺失或重复，或达到每窗口 200 页的安全上限后仍有下一页，系统会保留已经落盘的页面、把来源标记为未完成且不推进检查点；后续同步通过稳定消息 ID 安全回放该时间窗口，不会静默截断或创建重复来源。
