@@ -12,7 +12,8 @@ import {
   GitWorkspaceService,
   type AgentRuntime,
   type AgentRuntimeInput,
-  type AgentRuntimeResult
+  type AgentRuntimeResult,
+  type WorkspaceOpener
 } from "../src/agent";
 import type { CommandRunner } from "../src/adapters/lark/runner";
 import { createTodoMetadata } from "../src/core/todo";
@@ -286,10 +287,18 @@ describe.sequential("人工 Agent Loop", () => {
     const runtime = new FakeAgentRuntime([
       { threadId: "thread_api", message: "分析完成", outcome: "completed", usage: null }
     ]);
+    const openedWorkspaces: Array<{ editor: string; path: string }> = [];
+    const workspaceOpener: WorkspaceOpener = {
+      async open(editor, workspacePath) {
+        openedWorkspaces.push({ editor, path: workspacePath });
+        return { application: "Test IDE" };
+      }
+    };
     const context = await createApp({
       workspaceRoot: root,
       commandRunner: new EmptyRunner(),
       agentRuntime: runtime,
+      workspaceOpener,
       environment: { NODE_ENV: "test" }
     });
     databases.push(context.runtime.database);
@@ -326,7 +335,18 @@ describe.sequential("人工 Agent Loop", () => {
       (value) => value.attention === "review_required"
     );
     expect(completed.workspacePath).toBe(repository.body.path);
+    expect(completed.threadId).toBe("thread_api");
     expect(completed.messages?.at(-1)?.content).toBe("分析完成");
+    await request(context.app)
+      .post(`/api/agent/sessions/${started.body.id}/open-workspace`)
+      .set("x-context-space-csrf", csrf)
+      .send({ editor: "vscode" })
+      .expect(200, {
+        editor: "vscode",
+        path: repository.body.path,
+        application: "Test IDE"
+      });
+    expect(openedWorkspaces).toEqual([{ editor: "vscode", path: repository.body.path }]);
     expect((await request(context.app).get("/api/loop").expect(200)).body).toMatchObject({
       enabled: true,
       automaticExecutionEnabled: false,

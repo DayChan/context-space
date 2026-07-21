@@ -1135,10 +1135,13 @@ describe("Context Space workbench", () => {
       endedAt: null,
       messages: [
         { id: "message_user", sessionId: "session_timeline", turnId: "turn_timeline", role: "user", content: "检查代码", createdAt: "2026-07-21T00:00:00Z" },
-        { id: "message_agent", sessionId: "session_timeline", turnId: "turn_timeline", role: "assistant", content: "检查完成", createdAt: "2026-07-21T00:02:00Z" }
+        { id: "message_agent", sessionId: "session_timeline", turnId: "turn_timeline", role: "assistant", content: "## 检查完成\n\n- **测试通过**\n- `lint` 通过", createdAt: "2026-07-21T00:02:00Z" }
       ],
       turns: [],
-      events: [{ id: "event_command", sequence: 1, sessionId: "session_timeline", turnId: "turn_timeline", type: "command_execution.completed", data: { command: "npm test", status: "completed" }, createdAt: "2026-07-21T00:01:00Z" }],
+      events: [
+        { id: "event_command", sequence: 1, sessionId: "session_timeline", turnId: "turn_timeline", type: "command_execution.completed", data: { command: "npm test", status: "completed" }, createdAt: "2026-07-21T00:01:00Z" },
+        { id: "event_file", sequence: 2, sessionId: "session_timeline", turnId: "turn_timeline", type: "file_change.completed", data: { path: "src/web/App.tsx", status: "completed" }, createdAt: "2026-07-21T00:01:30Z" }
+      ],
       confirmations: []
     }];
 
@@ -1147,9 +1150,30 @@ describe("Context Space workbench", () => {
     const timeline = await screen.findByTestId("agent-timeline");
     expect(within(timeline).getAllByTestId("agent-timeline-item").map((item) => item.textContent)).toEqual([
       expect.stringContaining("检查代码"),
-      expect.stringContaining("npm test"),
+      expect.stringContaining("工具调用2 项npm test"),
       expect.stringContaining("检查完成")
     ]);
+    expect(within(timeline).getByRole("heading", { name: "检查完成" })).toBeInTheDocument();
+    expect(within(timeline).getByText("测试通过").tagName).toBe("STRONG");
+
+    const toolCall = within(timeline).getByText("npm test").closest("details");
+    expect(toolCall).not.toHaveAttribute("open");
+    expect(within(toolCall as HTMLElement).getByText("文件修改")).toBeInTheDocument();
+    expect(within(timeline).getAllByRole("group")).toHaveLength(1);
+    await userEvent.click(within(toolCall as HTMLElement).getByText("工具调用"));
+    expect(toolCall).toHaveAttribute("open");
+
+    expect(screen.getByText("thread_timeline")).toBeInTheDocument();
+    expect(screen.getByText("thread_timeline")).toHaveAttribute("title", "thread_timeline");
+    const editorSelect = screen.getByLabelText("打开工作区");
+    expect(within(editorSelect).getByRole("option", { name: "Trae CN" })).toBeInTheDocument();
+    expect(within(editorSelect).getByRole("option", { name: "VS Code" })).toBeInTheDocument();
+    await userEvent.selectOptions(editorSelect, "goland");
+    await userEvent.click(screen.getByRole("button", { name: "打开" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls).toContainEqual([
+      "/api/agent/sessions/session_timeline/open-workspace",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ editor: "goland" }) })
+    ]));
   });
 
   it("registers and removes an Agent repository in Settings", async () => {

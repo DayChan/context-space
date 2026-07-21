@@ -30,6 +30,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   BrowserRouter,
   Link,
@@ -41,6 +42,7 @@ import {
   useParams,
   useSearchParams
 } from "react-router-dom";
+import remarkGfm from "remark-gfm";
 import type {
   BaseMetadata,
   AgentEvent,
@@ -1174,20 +1176,48 @@ interface LoopResponse {
 
 type AgentTimelineItem =
   | { kind: "message"; value: AgentMessage; occurredAt: string; rank: number }
+  | { kind: "event-group"; values: AgentEvent[]; occurredAt: string; rank: number }
+  | { kind: "turn-error"; value: AgentTurn; occurredAt: string; rank: number };
+
+type RawAgentTimelineItem =
+  | { kind: "message"; value: AgentMessage; occurredAt: string; rank: number }
   | { kind: "event"; value: AgentEvent; occurredAt: string; rank: number }
   | { kind: "turn-error"; value: AgentTurn; occurredAt: string; rank: number };
 
+function AgentMarkdown({ content }: { content: string }) {
+  return <div className="agent-message-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown></div>;
+}
+
+function AgentToolEventGroup({ events }: { events: AgentEvent[] }) {
+  return (
+    <details className="agent-event" data-testid="agent-timeline-item">
+      <summary>
+        <span><ChevronRight aria-hidden="true" size={13} /><strong>工具调用</strong></span>
+        <small>{events.length} 项</small>
+      </summary>
+      <div className="agent-event-list">
+        {events.map((event) => {
+          const isCommand = event.type.includes("command");
+          const title = isCommand ? String(event.data.command ?? "命令执行") : "文件修改";
+          const status = String(event.data.status ?? "");
+          return <section className="agent-event-item" key={event.id}><div><code>{title}</code>{status && <small>{status}</small>}</div><pre><code>{JSON.stringify(event.data, null, 2)}</code></pre></section>;
+        })}
+      </div>
+    </details>
+  );
+}
+
 function buildAgentTimeline(session: AgentSession): AgentTimelineItem[] {
-  const messages: AgentTimelineItem[] = (session.messages ?? []).map((value) => ({
+  const messages: RawAgentTimelineItem[] = (session.messages ?? []).map((value) => ({
     kind: "message",
     value,
     occurredAt: value.createdAt,
     rank: value.role === "assistant" ? 2 : 0
   }));
-  const events: AgentTimelineItem[] = (session.events ?? [])
+  const events: RawAgentTimelineItem[] = (session.events ?? [])
     .filter(({ type }) => type.includes("command_execution") || type.includes("file_change"))
     .map((value) => ({ kind: "event", value, occurredAt: value.createdAt, rank: 1 }));
-  const turnErrors: AgentTimelineItem[] = (session.turns ?? [])
+  const turnErrors: RawAgentTimelineItem[] = (session.turns ?? [])
     .filter(({ status }) => ["failed", "cancelled", "interrupted"].includes(status))
     .map((value) => ({
       kind: "turn-error",
@@ -1196,11 +1226,30 @@ function buildAgentTimeline(session: AgentSession): AgentTimelineItem[] {
       rank: 3
     }));
 
-  return [...messages, ...events, ...turnErrors].sort((left, right) =>
+  const sorted = [...messages, ...events, ...turnErrors].sort((left, right) =>
     left.occurredAt.localeCompare(right.occurredAt)
       || left.rank - right.rank
       || left.value.id.localeCompare(right.value.id)
   );
+  const grouped: AgentTimelineItem[] = [];
+  for (const item of sorted) {
+    if (item.kind !== "event") {
+      grouped.push(item);
+      continue;
+    }
+    const previous = grouped.at(-1);
+    if (previous?.kind === "event-group") {
+      previous.values.push(item.value);
+    } else {
+      grouped.push({
+        kind: "event-group",
+        values: [item.value],
+        occurredAt: item.occurredAt,
+        rank: item.rank
+      });
+    }
+  }
+  return grouped;
 }
 
 function LoopPage() {
@@ -1218,6 +1267,8 @@ function LoopPage() {
   const [detailError, setDetailError] = useState("");
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
+  const [selectedEditor, setSelectedEditor] = useState<"trae" | "trae_cn" | "vscode" | "pycharm" | "goland">("trae");
+  const [openingEditor, setOpeningEditor] = useState<string | null>(null);
   const effectiveSelectedId = requestedId && loop.data.sessions.some(({ id }) => id === requestedId)
     ? requestedId
     : selectedId && loop.data.sessions.some(({ id }) => id === selectedId)
@@ -1270,6 +1321,22 @@ function LoopPage() {
     await loop.reload();
   }
 
+  async function openWorkspace(editor: "trae" | "trae_cn" | "vscode" | "pycharm" | "goland") {
+    if (!selectedDetail) return;
+    setOpeningEditor(editor);
+    setDetailError("");
+    try {
+      await api(`/api/agent/sessions/${encodeURIComponent(selectedDetail.id)}/open-workspace`, {
+        method: "POST",
+        body: JSON.stringify({ editor })
+      });
+    } catch (error) {
+      setDetailError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpeningEditor(null);
+    }
+  }
+
   const attentionLabels: Record<AgentSession["attention"], string> = {
     none: "正在执行",
     confirmation_required: "人工确认",
@@ -1304,11 +1371,10 @@ function LoopPage() {
               {timeline.map((item) => {
                 if (item.kind === "message") {
                   const entry = item.value;
-                  return <article className={`agent-message role-${entry.role}`} data-testid="agent-timeline-item" key={`message-${entry.id}`}><span>{entry.role === "assistant" ? "Agent" : entry.role === "user" ? "你" : "系统"}</span><p>{entry.content}</p><small>{formatDate(entry.createdAt)}</small></article>;
+                  return <article className={`agent-message role-${entry.role}`} data-testid="agent-timeline-item" key={`message-${entry.id}`}><span>{entry.role === "assistant" ? "Agent" : entry.role === "user" ? "你" : "系统"}</span><AgentMarkdown content={entry.content} /><small>{formatDate(entry.createdAt)}</small></article>;
                 }
-                if (item.kind === "event") {
-                  const event = item.value;
-                  return <article className="agent-event" data-testid="agent-timeline-item" key={`event-${event.id}`}><code>{event.type.includes("command") ? String(event.data.command ?? "命令执行") : "文件修改"}</code><small>{String(event.data.status ?? "")}</small></article>;
+                if (item.kind === "event-group") {
+                  return <AgentToolEventGroup events={item.values} key={`events-${item.values[0].id}`} />;
                 }
                 const turn = item.value;
                 return <article className="agent-turn-error" data-testid="agent-timeline-item" key={`turn-${turn.id}`} role="alert"><strong>Agent Turn {turn.status === "failed" ? "执行失败" : turn.status === "cancelled" ? "已取消" : "被服务重启中断"}</strong><p>{turn.error ?? "未提供错误详情"}</p><small>{formatDate(turn.completedAt ?? turn.createdAt)} · 会话与工作区已保留，可发送消息继续</small></article>;
@@ -1321,7 +1387,8 @@ function LoopPage() {
         <aside className="agent-context-panel">
           {selectedDetail && <>
             <div className="agent-panel-heading"><strong>工作上下文</strong></div>
-            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>工作目录</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>类型</span><strong>{selectedDetail.repository?.kind === "git" ? "Git 仓库" : "普通目录"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit?.slice(0, 12) ?? "不适用"}</code></div><div><span>工作区</span><code>{selectedDetail.workspacePath}</code></div></div>
+            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>Codex Session ID</span><code className="agent-session-id" title={selectedDetail.threadId ?? undefined}>{selectedDetail.threadId ?? "尚未创建"}</code></div><div><span>工作目录</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>类型</span><strong>{selectedDetail.repository?.kind === "git" ? "Git 仓库" : "普通目录"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit?.slice(0, 12) ?? "不适用"}</code></div><div><span>工作区</span><code title={selectedDetail.workspacePath}>{selectedDetail.workspacePath}</code></div></div>
+            {selectedDetail.workspaceLifecycle !== "removed" && <div className="agent-editor-section"><label htmlFor="agent-editor">打开工作区</label><div><select id="agent-editor" onChange={(event) => setSelectedEditor(event.target.value as typeof selectedEditor)} value={selectedEditor}><option value="trae">Trae</option><option value="trae_cn">Trae CN</option><option value="vscode">VS Code</option><option value="pycharm">PyCharm</option><option value="goland">GoLand</option></select><button className="secondary-button" disabled={openingEditor !== null} onClick={() => void openWorkspace(selectedEditor)} type="button"><ArrowUpRight size={13} />{openingEditor ? "正在打开" : "打开"}</button></div></div>}
             <div className="agent-context-actions">
               {selectedDetail.mode === "read_only" && selectedDetail.status === "active" && <button className="secondary-button" onClick={() => void action("upgrade-workspace")} type="button"><Sparkles size={15} />创建 worktree 继续</button>}
               {lastTurn?.status === "running" && <button className="secondary-button" onClick={() => void action("stop")} type="button"><Square size={14} />停止当前 Turn</button>}

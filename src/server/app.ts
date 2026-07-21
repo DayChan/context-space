@@ -11,6 +11,9 @@ import {
   CodexAgentRuntime,
   GitWorkspaceService,
   InvalidAgentRepositoryError,
+  MacWorkspaceOpener,
+  type AgentEditor,
+  type WorkspaceOpener,
   type AgentRuntime
 } from "../agent";
 import {
@@ -209,6 +212,9 @@ const agentConfirmationAnswerSchema = z.object({
   text: z.string().min(1).max(10_000).optional()
 }).strict().refine((value) => value.selection || value.text, "必须提供确认选项或文本回答");
 const cleanupAgentWorkspaceSchema = z.object({}).strict();
+const openAgentWorkspaceSchema = z.object({
+  editor: z.enum(["trae", "trae_cn", "vscode", "pycharm", "goland"])
+}).strict();
 
 export interface Runtime {
   store: MarkdownStore;
@@ -243,6 +249,7 @@ export interface CreateAppOptions {
   commandRunner?: CommandRunner;
   meegleCommandRunner?: MeegleCommandRunner;
   agentRuntime?: AgentRuntime;
+  workspaceOpener?: WorkspaceOpener;
   analysisProviders?: AnalysisProvider[];
   environment?: NodeJS.ProcessEnv;
   staticRoot?: string;
@@ -669,6 +676,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
     new GitWorkspaceService(options.workspaceRoot),
     agentCoordinator
   );
+  const workspaceOpener = options.workspaceOpener ?? new MacWorkspaceOpener();
 
   const runtime: Runtime = {
     store,
@@ -1360,6 +1368,20 @@ export async function createApp(options: CreateAppOptions): Promise<{
     try {
       cleanupAgentWorkspaceSchema.parse(request.body ?? {});
       response.json(await agentLoop.cleanup(request.params.id));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/agent/sessions/:id/open-workspace", async (request, response, next) => {
+    try {
+      const session = agentLoop.get(request.params.id);
+      if (!session) throw new AgentRequestError("Agent 会话不存在");
+      if (session.workspaceLifecycle === "removed") throw new AgentRequestError("Agent 工作区已被清理");
+      if (!existsSync(session.workspacePath)) throw new AgentRequestError("Agent 工作区路径不存在");
+      const { editor } = openAgentWorkspaceSchema.parse(request.body) as { editor: AgentEditor };
+      const result = await workspaceOpener.open(editor, session.workspacePath);
+      response.json({ editor, path: session.workspacePath, ...result });
     } catch (error) {
       next(error);
     }
