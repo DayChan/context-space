@@ -1,0 +1,62 @@
+.env.example
+  s_62af5b86b6a8cc::t_a061a3ca7c5fc6 19
+README.md
+  s_62af5b86b6a8cc::t_cdc0edde44a344 5,67,82,107-116
+src/analysis/candidate-review.ts
+  s_62af5b86b6a8cc::t_796413a975b3e3 16-20,180-181,210,214-240,255-260
+src/analysis/config.ts
+  s_62af5b86b6a8cc::t_99dfa928402865 55-62,70-73,76-79,134,136-137,139-142,157-159
+src/analysis/persistent-processor.ts
+  s_62af5b86b6a8cc::t_5193773873f010 14-18,26,67,70-73,185,192,198-223,254,260,264-278,281-284
+src/analysis/prompt.ts
+  s_62af5b86b6a8cc::t_1bc88e2307b598 6,126,132
+src/analysis/worker.ts
+  s_62af5b86b6a8cc::t_fbd3fa8655fde0 1-2,14-65,92-98,154-216
+src/core/workspace.ts
+  s_62af5b86b6a8cc::t_34f0b4b877e1cf 77,197-200
+src/machine/context-repository.ts
+  s_62af5b86b6a8cc::t_a6dfcefe3acd76 33-37,283-335
+src/machine/legacy-migration.ts
+  s_62af5b86b6a8cc::t_0fbb6eb58e0a26 551-556
+src/server/app.ts
+  s_62af5b86b6a8cc::t_9d456a03d0db01 19-22,42-43,102-107,138,145,260,274-349,357,384,396,451-454,478-499,505,508,511-513,558,679,788,823-825,866-884,926-928
+src/web/App.tsx
+  s_62af5b86b6a8cc::t_295d12336ba682 76,81-86,578,580-583,585-600,721,725,736,777,787,803,1088-1090,1112-1114,1124,1129,1175,1334-1353,1498-1527,1569,1898-1904,1908
+src/web/styles.css
+  s_62af5b86b6a8cc::t_5926d873064d0d 197-198,371,374-378
+tests/analysis-worker.test.ts
+  s_62af5b86b6a8cc::t_38093579c9718c 4,10,14,17-18,26,59-74,77-92,125,129,138,147-149,160-164,175-176,184,186,189-211,244-245,258-348
+tests/analysis.test.ts
+  s_62af5b86b6a8cc::t_58315ca33b0f79 156,673
+tests/api.test.ts
+  s_62af5b86b6a8cc::t_52f1ca98bf220e 73-74,83,253,260-262,281,358,384,387-394,407-421,423-443,465-466,468,470-471,474-477,513-520,534-535,544-545,573-577,720-747,756-759,767-769,776-781
+tests/candidate-review.test.ts
+  s_62af5b86b6a8cc::t_ca0ea925a89fd7 86-125,159-193
+tests/frontend.test.tsx
+  s_62af5b86b6a8cc::t_8e9c52eff051f4 40,130,134-139,145,149-154,159,163-164,207,223-225,235,243,279,288,292-294,298,300,337-347,365,456-518,521,523,525-527,529-537,541-562,653,657-658,660-665,675-687,712-716,720,732-733,809-824
+tests/legacy-migration.test.ts
+  s_62af5b86b6a8cc::t_0f387576ef669a 78,103,210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7471ea5289b97a3f11445a007dcc2b20e4968076",
+  "prompts": {},
+  "humans": {
+    "h_969d39e0df1452": {
+      "author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_62af5b86b6a8cc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f803c-e122-7fa3-aeca-d3e318a65e17",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
