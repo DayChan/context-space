@@ -27,7 +27,10 @@ import { ANALYSIS_PROMPT_VERSION } from "../analysis/prompt";
 import { ANALYSIS_SCHEMA_VERSION } from "../analysis/schema";
 import { LarkAdapter } from "../adapters/lark/adapter";
 import { LarkCliCommandRunner, type CommandRunner } from "../adapters/lark/runner";
-import { LarkSyncService } from "../adapters/lark/sync";
+import {
+  LarkSyncService,
+  syncOptionsFromEnvironment
+} from "../adapters/lark/sync";
 import {
   LarkSyncScheduleConfigService,
   PeriodicLarkSyncScheduler
@@ -591,7 +594,8 @@ export async function createApp(options: CreateAppOptions): Promise<{
       currentUserId:
         settings.get<string>("current_user_id") ?? "self"
     }),
-    logger
+    logger,
+    syncOptionsFromEnvironment(environment)
   );
   await sync.loadStatus();
   const syncScheduler = new PeriodicLarkSyncScheduler(

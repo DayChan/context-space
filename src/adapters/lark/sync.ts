@@ -21,6 +21,10 @@ import { nullLogger, withLogContext, type Logger } from "../../logging";
 import { LarkAdapter, type LarkSyncSource, splitWindows } from "./adapter";
 
 const DEFAULT_MAX_MESSAGE_PAGES_PER_WINDOW = 200;
+const DEFAULT_BACKFILL_DAYS = 30;
+const DEFAULT_RECONCILIATION_HOURS = 1;
+const DEFAULT_WINDOW_DAYS = 7;
+const HOUR_MILLISECONDS = 60 * 60 * 1_000;
 
 function isMessageSource(
   source: LarkSyncSource
@@ -36,10 +40,71 @@ function isAnalyzable(
 
 export interface SyncOptions {
   backfillDays?: number;
-  overlapMinutes?: number;
+  reconciliationHours?: number;
   windowDays?: number;
   maxMessagePagesPerWindow?: number;
   now?: Date;
+}
+
+export type DefaultSyncOptions = Omit<SyncOptions, "now">;
+
+function positiveInteger(
+  value: number,
+  name: string
+): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+function environmentInteger(
+  environment: NodeJS.ProcessEnv,
+  key: string,
+  fallback: number
+): number {
+  const raw = environment[key];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  return positiveInteger(Number(raw), key);
+}
+
+export function syncOptionsFromEnvironment(
+  environment: NodeJS.ProcessEnv
+): DefaultSyncOptions {
+  return {
+    backfillDays: environmentInteger(
+      environment,
+      "CONTEXT_SPACE_BACKFILL_DAYS",
+      DEFAULT_BACKFILL_DAYS
+    ),
+    reconciliationHours: environmentInteger(
+      environment,
+      "CONTEXT_SPACE_RECONCILIATION_HOURS",
+      DEFAULT_RECONCILIATION_HOURS
+    )
+  };
+}
+
+export function synchronizationStart(input: {
+  previousCursor: string | null;
+  now: Date;
+  backfillDays: number;
+  reconciliationHours: number;
+}): Date {
+  const incrementalStart = input.previousCursor
+    ? new Date(input.previousCursor)
+    : new Date(
+        input.now.getTime() - input.backfillDays * 24 * HOUR_MILLISECONDS
+      );
+  if (Number.isNaN(incrementalStart.getTime())) {
+    throw new Error(`Invalid synchronization cursor: ${input.previousCursor}`);
+  }
+  const reconciliationStart = new Date(
+    input.now.getTime() - input.reconciliationHours * HOUR_MILLISECONDS
+  );
+  return new Date(
+    Math.min(incrementalStart.getTime(), reconciliationStart.getTime())
+  );
 }
 
 export class LarkSyncService {
@@ -53,7 +118,8 @@ export class LarkSyncService {
     private readonly jobs: AnalysisJobRepository,
     private readonly adapter: LarkAdapter,
     private readonly getAnalysisJobConfig: () => Promise<PersistentAnalysisJobConfig>,
-    logger: Logger = nullLogger
+    logger: Logger = nullLogger,
+    private readonly defaultOptions: DefaultSyncOptions = {}
   ) {
     this.logger = logger.child({ component: "lark-sync" });
   }
@@ -189,18 +255,32 @@ export class LarkSyncService {
   ): Promise<SyncStatus> {
     const syncStarted = process.hrtime.bigint();
     const now = options.now ?? new Date();
-    const backfillDays = options.backfillDays ?? 30;
-    const overlapMinutes = options.overlapMinutes ?? 10;
-    const windowDays = options.windowDays ?? 7;
+    const backfillDays = positiveInteger(
+      options.backfillDays ??
+        this.defaultOptions.backfillDays ??
+        DEFAULT_BACKFILL_DAYS,
+      "backfillDays"
+    );
+    const reconciliationHours = positiveInteger(
+      options.reconciliationHours ??
+        this.defaultOptions.reconciliationHours ??
+        DEFAULT_RECONCILIATION_HOURS,
+      "reconciliationHours"
+    );
+    const windowDays = positiveInteger(
+      options.windowDays ??
+        this.defaultOptions.windowDays ??
+        DEFAULT_WINDOW_DAYS,
+      "windowDays"
+    );
     const maxMessagePagesPerWindow =
       options.maxMessagePagesPerWindow ??
+      this.defaultOptions.maxMessagePagesPerWindow ??
       DEFAULT_MAX_MESSAGE_PAGES_PER_WINDOW;
-    if (
-      !Number.isInteger(maxMessagePagesPerWindow) ||
-      maxMessagePagesPerWindow < 1
-    ) {
-      throw new Error("maxMessagePagesPerWindow must be a positive integer");
-    }
+    positiveInteger(
+      maxMessagePagesPerWindow,
+      "maxMessagePagesPerWindow"
+    );
     let analysisConfig = await this.getAnalysisJobConfig();
     this.status = {
       running: true,
@@ -222,7 +302,7 @@ export class LarkSyncService {
     };
     this.logger.info("lark.sync.started", {
       backfill_days: backfillDays,
-      overlap_minutes: overlapMinutes,
+      reconciliation_hours: reconciliationHours,
       window_days: windowDays,
       max_message_pages_per_window: maxMessagePagesPerWindow,
       source_count: 5
@@ -240,12 +320,12 @@ export class LarkSyncService {
     for (const source of sources) {
       const sourceStarted = process.hrtime.bigint();
       const previous = this.syncRepository.getCursor(source);
-      const defaultStart = new Date(
-        now.getTime() - backfillDays * 24 * 60 * 60 * 1000
-      );
-      const start = previous
-        ? new Date(new Date(previous).getTime() - overlapMinutes * 60 * 1000)
-        : defaultStart;
+      const start = synchronizationStart({
+        previousCursor: previous,
+        now,
+        backfillDays,
+        reconciliationHours
+      });
       const windows =
         source === "mentions" || source === "p2p" || source === "calendar"
           ? splitWindows(start, now, windowDays)
@@ -457,12 +537,12 @@ export class LarkSyncService {
     config: PersistentAnalysisJobConfig
   ): number {
     return this.database.transaction(() => {
-      let inserted = 0;
+      let persisted = 0;
       const analyzable: NormalizedSourceRecord[] = [];
       for (const record of records) {
         const result = this.context.upsertSource(record);
-        if (result.inserted) inserted += 1;
-        if (isAnalyzable(record)) analyzable.push(record);
+        if (result.changed) persisted += 1;
+        if (result.changed && isAnalyzable(record)) analyzable.push(record);
       }
       if (analyzable.length) {
         const sourceIds = analyzable.map(({ sourceId }) => sourceId);
@@ -479,7 +559,7 @@ export class LarkSyncService {
           config: config as unknown as Record<string, unknown>
         });
       }
-      return inserted;
+      return persisted;
     });
   }
 

@@ -21,7 +21,11 @@ import {
   prepareReadOnlyLarkArgs,
   UnsafeLarkCommandError
 } from "../src/adapters/lark/runner";
-import { LarkSyncService } from "../src/adapters/lark/sync";
+import {
+  LarkSyncService,
+  synchronizationStart,
+  syncOptionsFromEnvironment
+} from "../src/adapters/lark/sync";
 import { ContextIndex } from "../src/core/index";
 import { initializeWorkspace } from "../src/core/workspace";
 import {
@@ -243,6 +247,46 @@ class PaginatedP2PRunner extends FakeRunner {
   }
 }
 
+class DelayedMentionRunner implements CommandRunner {
+  calls: string[][] = [];
+  private mentionFetches = 0;
+
+  async run(args: string[]): Promise<unknown> {
+    this.calls.push(args);
+    const command = `${args[0]}:${args[1]}`;
+    if (command === "contact:+get-user") {
+      return { open_id: "ou_self", name: "Me" };
+    }
+    if (command === "im:+messages-search" && args.includes("--is-at-me")) {
+      this.mentionFetches += 1;
+      if (this.mentionFetches === 1) return { messages: [] };
+      return {
+        messages: [
+          {
+            message_id: "om_delayed_mention",
+            content: JSON.stringify({
+              text: "@陈铎汝 铎汝，代理mgr你看看得迁移下了"
+            }),
+            create_time: String(
+              new Date("2026-07-21T03:42:00Z").getTime()
+            ),
+            sender: { id: "ou_sender", name: "李正磊" },
+            chat_name: "青岛汇聚机房下线前置确认",
+            chat_type: "group",
+            mentions: [
+              { id: "ou_self", key: "@_user_1", name: "陈铎汝" }
+            ]
+          }
+        ]
+      };
+    }
+    if (command === "im:+messages-search") return { messages: [] };
+    if (command === "calendar:+agenda") return { events: [] };
+    if (command === "task:+get-my-tasks") return { tasks: [] };
+    throw new Error(`Unexpected command: ${command}`);
+  }
+}
+
 describe("read-only Lark adapter", () => {
   let root: string;
 
@@ -265,6 +309,52 @@ describe("read-only Lark adapter", () => {
     expect(() => assertReadOnlyLarkCommand(["task", "+complete"])).toThrow(
       UnsafeLarkCommandError
     );
+  });
+
+  it("keeps the full cursor interval and limits recent reconciliation to one hour", () => {
+    const now = new Date("2026-07-21T12:00:00Z");
+    expect(
+      synchronizationStart({
+        previousCursor: "2026-07-18T12:00:00Z",
+        now,
+        backfillDays: 30,
+        reconciliationHours: 1
+      }).toISOString()
+    ).toBe("2026-07-18T12:00:00.000Z");
+    expect(
+      synchronizationStart({
+        previousCursor: "2026-07-21T11:00:00Z",
+        now,
+        backfillDays: 30,
+        reconciliationHours: 1
+      }).toISOString()
+    ).toBe("2026-07-21T11:00:00.000Z");
+    expect(
+      synchronizationStart({
+        previousCursor: null,
+        now,
+        backfillDays: 30,
+        reconciliationHours: 1
+      }).toISOString()
+    ).toBe("2026-06-21T12:00:00.000Z");
+  });
+
+  it("loads initial backfill and reconciliation defaults from the environment", () => {
+    expect(syncOptionsFromEnvironment({})).toEqual({
+      backfillDays: 30,
+      reconciliationHours: 1
+    });
+    expect(
+      syncOptionsFromEnvironment({
+        CONTEXT_SPACE_BACKFILL_DAYS: "45",
+        CONTEXT_SPACE_RECONCILIATION_HOURS: "48"
+      })
+    ).toEqual({ backfillDays: 45, reconciliationHours: 48 });
+    expect(() =>
+      syncOptionsFromEnvironment({
+        CONTEXT_SPACE_RECONCILIATION_HOURS: "0"
+      })
+    ).toThrow("CONTEXT_SPACE_RECONCILIATION_HOURS must be a positive integer");
   });
 
   it("uses second-precision single-page message commands and requests only incomplete tasks", async () => {
@@ -884,7 +974,7 @@ describe("read-only Lark adapter", () => {
       now: clock,
       backfillDays: 1,
       windowDays: 1,
-      overlapMinutes: 10
+      reconciliationHours: 1
     });
     expect(firstStatus.results.every((result) => result.ok)).toBe(true);
     const machine = new MachineContextRepository(testDatabases.at(-1)!);
@@ -895,7 +985,7 @@ describe("read-only Lark adapter", () => {
       now: new Date("2026-07-20T12:05:00Z"),
       backfillDays: 1,
       windowDays: 1,
-      overlapMinutes: 10
+      reconciliationHours: 1
     });
     expect(machine.listSources()).toHaveLength(sourceCount);
     expect(secondStatus.results.find((result) => result.source === "mentions")?.persisted).toBe(0);
@@ -915,6 +1005,64 @@ describe("read-only Lark adapter", () => {
     expect(
       new SyncRepository(testDatabases.at(-1)!).getCursor("tasks")
     ).not.toBeNull();
+  });
+
+  it("recovers a mention that becomes visible after its creation-time cursor advanced", async () => {
+    const store = await initializeWorkspace(root);
+    const index = new ContextIndex();
+    await index.rebuild(store);
+    const runner = new DelayedMentionRunner();
+    const sync = await createTestSync(root, new LarkAdapter(runner));
+    const options = {
+      backfillDays: 1,
+      reconciliationHours: 1,
+      windowDays: 7
+    };
+
+    await sync.sync({
+      ...options,
+      now: new Date("2026-07-21T03:55:46Z")
+    });
+    const database = testDatabases.at(-1)!;
+    const context = new MachineContextRepository(database);
+    const jobs = new AnalysisJobRepository(database);
+    expect(
+      context.getSource("lark:message:om_delayed_mention")
+    ).toBeNull();
+    expect(jobs.counts().queued).toBe(0);
+
+    const recovered = await sync.sync({
+      ...options,
+      now: new Date("2026-07-21T04:30:00Z")
+    });
+    expect(
+      context.getSource("lark:message:om_delayed_mention")?.body
+    ).toContain("代理mgr你看看得迁移下了");
+    expect(
+      recovered.results.find(({ source }) => source === "mentions")
+    ).toMatchObject({ ok: true, received: 1, persisted: 1 });
+    expect(jobs.counts().queued).toBe(1);
+
+    const mentionCalls = runner.calls.filter((args) =>
+      args.includes("--is-at-me")
+    );
+    expect(mentionCalls[1]).toEqual(
+      expect.arrayContaining([
+        "--start",
+        "2026-07-21T03:30:00Z",
+        "--end",
+        "2026-07-21T04:30:00Z"
+      ])
+    );
+
+    const replayed = await sync.sync({
+      ...options,
+      now: new Date("2026-07-21T04:35:00Z")
+    });
+    expect(
+      replayed.results.find(({ source }) => source === "mentions")
+    ).toMatchObject({ ok: true, received: 1, persisted: 0 });
+    expect(jobs.counts().queued).toBe(1);
   });
 
   it("advances source cursors before asynchronous analysis executes", async () => {

@@ -59,7 +59,7 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
       locale: "zh-CN",
       timezone: "Asia/Shanghai",
       initial_backfill_days: 30,
-      overlap_minutes: 10
+      reconciliation_hours: 1
     }),
     body: "# Workspace\n\nLocal-first configuration for Context Space."
   },

@@ -4,8 +4,8 @@
 
 | Dimension | Status |
 |---|---|
-| Completeness | 41/41 tasks；40/40 requirements |
-| Correctness | 40/40 requirements and 52/52 scenarios covered by implementation or regression evidence |
+| Completeness | 42/42 tasks；40/40 requirements |
+| Correctness | 40/40 requirements and 54/54 scenarios covered by implementation or regression evidence |
 | Coherence | Storage ownership, transaction boundaries, recovery state machines and local-only security follow the design |
 
 ### Evidence Map
@@ -45,7 +45,7 @@ None required for this change.
 
 ### Quality Gate
 
-`npm run check` passed: TypeScript, ESLint, 105 tests, server bundle and production Web build. The OpenSpec change also passed strict validation.
+`npm run check` passed: TypeScript, ESLint, 123 tests, server bundle and production Web build. The OpenSpec change also passed strict validation.
 
 ### Final Assessment
 
