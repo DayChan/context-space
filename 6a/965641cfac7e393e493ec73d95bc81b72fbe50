@@ -1,0 +1,46 @@
+README.md
+  s_62af5b86b6a8cc::t_90af1cfd8eb361 59-67
+src/adapters/lark/scheduler.ts
+  s_62af5b86b6a8cc::t_d0b876001c142f 1-133
+src/adapters/lark/sync.ts
+  s_62af5b86b6a8cc::t_7b20652ce97e8b 118-135,139,141-142,152-154
+src/server/app.ts
+  s_62af5b86b6a8cc::t_65603e744a3b25 31-34,139,456,547-551,559,822-823,907-912
+src/server/main.ts
+  s_62af5b86b6a8cc::t_161fad75a8c250 47,69
+src/web/App.tsx
+  s_62af5b86b6a8cc::t_1d1c4647898e41 1081-1094,1118-1127,1199,1397-1422,1448-1497
+src/web/styles.css
+  s_62af5b86b6a8cc::t_06263a9dacf459 304-305,434-435
+tests/api.test.ts
+  s_62af5b86b6a8cc::t_59420752019735 691-716
+tests/frontend.test.tsx
+  s_62af5b86b6a8cc::t_b65d51da859611 208-212,221-230,294,369-378,850-877
+tests/lark-scheduler.test.ts
+  s_62af5b86b6a8cc::t_eb250444a3902b 1-84
+tests/lark.test.ts
+  s_62af5b86b6a8cc::t_707022d9968b17 697-699
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6a965641cfac7e393e493ec73d95bc81b72fbe50",
+  "prompts": {},
+  "humans": {
+    "h_969d39e0df1452": {
+      "author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_62af5b86b6a8cc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f803c-e122-7fa3-aeca-d3e318a65e17",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
