@@ -1,0 +1,48 @@
+openspec/specs/candidate-review-workflow/spec.md
+  s_730dd22e3c1143::t_6c95375ced8c19 1-39
+openspec/specs/context-workbench-ui/spec.md
+  s_730dd22e3c1143::t_540997669fbe5c 5,17,20-21,31,33-51,54,57,60-63,65,70-109
+openspec/specs/durable-analysis-queue/spec.md
+  s_730dd22e3c1143::t_6b7914a8e6c2df 1-35
+openspec/specs/knowledge-wiki/spec.md
+  s_730dd22e3c1143::t_6631dbd91637ed 10,14,17,20-21,31,34-35,38,42
+openspec/specs/lark-context-sync/spec.md
+  s_730dd22e3c1143::t_6dd1cbab5c1013 5,17,20-29,32,36-48,51,55-67,70,74-112
+openspec/specs/llm-content-analysis/spec.md
+  s_730dd22e3c1143::t_04c58cd812443b 5,10,14,17-22,25,35-42,44,48,52-60,70,76-83,85,92-97,100,110-117,119,122-123,127-131,134,137-138,142-154
+openspec/specs/machine-context-store/spec.md
+  s_730dd22e3c1143::t_71f24de50200b2 1-50
+openspec/specs/markdown-context-store/spec.md
+  s_730dd22e3c1143::t_07c36389dfdd92 5,10,14,17,20,35,38-39,42,44-50
+openspec/specs/markdown-index-sync/spec.md
+  s_730dd22e3c1143::t_bda20f0e3bc640 1-36
+openspec/specs/people-profiles/spec.md
+  s_730dd22e3c1143::t_c893ff431af5ee 5,10,14,17,21-29,32,35-36
+openspec/specs/structured-logging/spec.md
+  s_730dd22e3c1143::t_371520a732dbc4 1-134
+openspec/specs/todo-management/spec.md
+  s_730dd22e3c1143::t_7c0904ca4fbaf7 5,10,14,17-22,25,31-38,51,54-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "01f02862a8177ae7ded11fd2f68955edb1d1861e",
+  "prompts": {},
+  "humans": {
+    "h_969d39e0df1452": {
+      "author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_730dd22e3c1143": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7efa-81f7-7213-beca-f2211afe59cb",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
