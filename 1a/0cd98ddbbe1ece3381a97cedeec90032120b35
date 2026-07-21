@@ -1,0 +1,27 @@
+openspec/changes/add-manual-agent-loop/specs/context-workbench-ui/spec.md
+  s_aa2817e42ba2bf::t_b7807491b65a85 15,21-24
+src/web/App.tsx
+  s_aa2817e42ba2bf::t_47d6221b7c706f 46-47,50,1175-1205,1280,1303-1315
+src/web/styles.css
+  s_aa2817e42ba2bf::t_567f0b3fbebc5a 186,290,297-298,301
+tests/frontend.test.tsx
+  s_aa2817e42ba2bf::t_d63948fd1f7e5b 3,1107-1154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1a0cd98ddbbe1ece3381a97cedeec90032120b35",
+  "prompts": {},
+  "sessions": {
+    "s_aa2817e42ba2bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f83e0-7301-7ee0-9363-b643ac673cf7",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
