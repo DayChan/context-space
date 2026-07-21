@@ -43,8 +43,11 @@ import {
 } from "react-router-dom";
 import type {
   BaseMetadata,
+  AgentEvent,
+  AgentMessage,
   AgentRepository,
   AgentSession,
+  AgentTurn,
   AgentWorkspaceMode,
   KnowledgeMetadata,
   LeaderConfig,
@@ -1169,6 +1172,37 @@ interface LoopResponse {
   sessions: AgentSession[];
 }
 
+type AgentTimelineItem =
+  | { kind: "message"; value: AgentMessage; occurredAt: string; rank: number }
+  | { kind: "event"; value: AgentEvent; occurredAt: string; rank: number }
+  | { kind: "turn-error"; value: AgentTurn; occurredAt: string; rank: number };
+
+function buildAgentTimeline(session: AgentSession): AgentTimelineItem[] {
+  const messages: AgentTimelineItem[] = (session.messages ?? []).map((value) => ({
+    kind: "message",
+    value,
+    occurredAt: value.createdAt,
+    rank: value.role === "assistant" ? 2 : 0
+  }));
+  const events: AgentTimelineItem[] = (session.events ?? [])
+    .filter(({ type }) => type.includes("command_execution") || type.includes("file_change"))
+    .map((value) => ({ kind: "event", value, occurredAt: value.createdAt, rank: 1 }));
+  const turnErrors: AgentTimelineItem[] = (session.turns ?? [])
+    .filter(({ status }) => ["failed", "cancelled", "interrupted"].includes(status))
+    .map((value) => ({
+      kind: "turn-error",
+      value,
+      occurredAt: value.completedAt ?? value.createdAt,
+      rank: 3
+    }));
+
+  return [...messages, ...events, ...turnErrors].sort((left, right) =>
+    left.occurredAt.localeCompare(right.occurredAt)
+      || left.rank - right.rank
+      || left.value.id.localeCompare(right.value.id)
+  );
+}
+
 function LoopPage() {
   const loop = useApi<LoopResponse>("/api/loop", {
     enabled: true,
@@ -1243,7 +1277,7 @@ function LoopPage() {
     review_required: "待验收"
   };
   const pendingConfirmations = selectedDetail?.confirmations?.filter(({ status }) => status === "pending") ?? [];
-  const unsuccessfulTurns = selectedDetail?.turns?.filter(({ status }) => ["failed", "cancelled", "interrupted"].includes(status)) ?? [];
+  const timeline = selectedDetail ? buildAgentTimeline(selectedDetail) : [];
   const lastTurn = selectedDetail?.turns?.at(-1);
   return (
     <>
@@ -1266,10 +1300,19 @@ function LoopPage() {
         <main className="agent-conversation-panel">
           {selectedDetail ? <>
             <div className="agent-panel-heading"><div><strong>{selectedDetail.title}</strong><small>{lastTurn?.status ?? selectedDetail.attention}</small></div>{lastTurn?.status === "running" && <Badge tone="mint">Running</Badge>}</div>
-            <div className="agent-messages">
-              {selectedDetail.messages?.map((entry) => <article className={`agent-message role-${entry.role}`} key={entry.id}><span>{entry.role === "assistant" ? "Agent" : entry.role === "user" ? "你" : "系统"}</span><p>{entry.content}</p><small>{formatDate(entry.createdAt)}</small></article>)}
-              {selectedDetail.events?.filter(({ type }) => type.includes("command_execution") || type.includes("file_change")).map((event) => <article className="agent-event" key={event.id}><code>{event.type.includes("command") ? String(event.data.command ?? "命令执行") : "文件修改"}</code><small>{String(event.data.status ?? "")}</small></article>)}
-              {unsuccessfulTurns.map((turn) => <article className="agent-turn-error" key={turn.id} role="alert"><strong>Agent Turn {turn.status === "failed" ? "执行失败" : turn.status === "cancelled" ? "已取消" : "被服务重启中断"}</strong><p>{turn.error ?? "未提供错误详情"}</p><small>{formatDate(turn.completedAt ?? turn.createdAt)} · 会话与工作区已保留，可发送消息继续</small></article>)}
+            <div className="agent-messages" data-testid="agent-timeline">
+              {timeline.map((item) => {
+                if (item.kind === "message") {
+                  const entry = item.value;
+                  return <article className={`agent-message role-${entry.role}`} data-testid="agent-timeline-item" key={`message-${entry.id}`}><span>{entry.role === "assistant" ? "Agent" : entry.role === "user" ? "你" : "系统"}</span><p>{entry.content}</p><small>{formatDate(entry.createdAt)}</small></article>;
+                }
+                if (item.kind === "event") {
+                  const event = item.value;
+                  return <article className="agent-event" data-testid="agent-timeline-item" key={`event-${event.id}`}><code>{event.type.includes("command") ? String(event.data.command ?? "命令执行") : "文件修改"}</code><small>{String(event.data.status ?? "")}</small></article>;
+                }
+                const turn = item.value;
+                return <article className="agent-turn-error" data-testid="agent-timeline-item" key={`turn-${turn.id}`} role="alert"><strong>Agent Turn {turn.status === "failed" ? "执行失败" : turn.status === "cancelled" ? "已取消" : "被服务重启中断"}</strong><p>{turn.error ?? "未提供错误详情"}</p><small>{formatDate(turn.completedAt ?? turn.createdAt)} · 会话与工作区已保留，可发送消息继续</small></article>;
+              })}
             </div>
             {pendingConfirmations.map((confirmation) => <section className="agent-confirmation" key={confirmation.id}><CircleUserRound size={18} /><div><strong>需要人工确认</strong><p>{confirmation.question}</p><div>{confirmation.options.map((option) => <button className="secondary-button" key={option} onClick={() => void answer(confirmation.id, option)} type="button">{option === "approve" ? "批准" : option === "reject" ? "拒绝" : option}</button>)}</div></div></section>)}
             <form className="agent-composer" onSubmit={send}><textarea aria-label="发送给 Agent" onChange={(event) => setMessage(event.target.value)} placeholder="继续和 Agent 对话…" value={message} /><button className="primary-button" disabled={sending || !message.trim() || selectedDetail.status !== "active"} type="submit"><Send size={16} />发送</button></form>

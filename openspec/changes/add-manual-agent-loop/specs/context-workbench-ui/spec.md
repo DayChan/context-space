@@ -12,11 +12,15 @@
 - **THEN** 工作台不提供可提交的 Agent 启动动作
 
 ### Requirement: Agent 会话工作台
-Loop SHALL 使用会话列表、对话区域和工作上下文区域展示真实 Agent Session；用户 SHALL 能查看当前状态、来源、仓库、工作区、分支、消息、命令与文件修改摘要。
+Loop SHALL 使用会话列表、对话区域和工作上下文区域展示真实 Agent Session；用户 SHALL 能查看当前状态、来源、仓库、工作区、分支、消息、命令与文件修改摘要。会话选择项与所在面板 SHALL 保持一致宽度，对话区域 SHALL 按发生时间在同一时间线内交错展示消息、命令、文件修改与 Turn 异常。
 
 #### Scenario: 查看运行中会话
 - **WHEN** Agent Turn 正在产生流式事件
 - **THEN** Loop 实时更新会话状态与有界事件投影，无需整页刷新
+
+#### Scenario: 按实际顺序查看 Agent 执行过程
+- **WHEN** 一次 Turn 依次产生用户消息、工具调用和 Agent 回复
+- **THEN** Loop 按时间顺序交错展示这些内容，而不是将全部工具调用追加到消息之后
 
 ### Requirement: 会话对话与确认交互
 Loop SHALL 允许用户向空闲或运行中会话发送后续消息、回答 pending Confirmation、停止 Turn 和验收结果，并 SHALL 在失败时保留已输入内容和展示错误。

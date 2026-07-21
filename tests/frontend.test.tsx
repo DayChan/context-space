@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -1102,6 +1102,54 @@ describe("Context Space workbench", () => {
     expect(await screen.findByText("Agent Turn 执行失败")).toBeInTheDocument();
     expect(screen.getByText("Structured output schema rejected")).toBeInTheDocument();
     expect(screen.getByText(/会话与工作区已保留/)).toBeInTheDocument();
+  });
+
+  it("renders Agent messages and tool calls in chronological order", async () => {
+    const repository: AgentRepository = {
+      id: "repo_timeline",
+      name: "context-space",
+      path: "/workspace/context-space",
+      kind: "git",
+      headCommit: "1234567890abcdef",
+      branch: "main",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:00Z"
+    };
+    agentSessions = [{
+      id: "session_timeline",
+      title: "时间线任务",
+      sourceKind: "todo",
+      sourceId: "todo_owed",
+      repositoryId: repository.id,
+      repository,
+      mode: "read_only",
+      workspacePath: repository.path,
+      branch: null,
+      baseCommit: repository.headCommit,
+      threadId: "thread_timeline",
+      status: "active",
+      attention: "reply_required",
+      workspaceLifecycle: "ready",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:03:00Z",
+      endedAt: null,
+      messages: [
+        { id: "message_user", sessionId: "session_timeline", turnId: "turn_timeline", role: "user", content: "检查代码", createdAt: "2026-07-21T00:00:00Z" },
+        { id: "message_agent", sessionId: "session_timeline", turnId: "turn_timeline", role: "assistant", content: "检查完成", createdAt: "2026-07-21T00:02:00Z" }
+      ],
+      turns: [],
+      events: [{ id: "event_command", sequence: 1, sessionId: "session_timeline", turnId: "turn_timeline", type: "command_execution.completed", data: { command: "npm test", status: "completed" }, createdAt: "2026-07-21T00:01:00Z" }],
+      confirmations: []
+    }];
+
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/loop?session=session_timeline"]}><AppView /></MemoryRouter>);
+
+    const timeline = await screen.findByTestId("agent-timeline");
+    expect(within(timeline).getAllByTestId("agent-timeline-item").map((item) => item.textContent)).toEqual([
+      expect.stringContaining("检查代码"),
+      expect.stringContaining("npm test"),
+      expect.stringContaining("检查完成")
+    ]);
   });
 
   it("registers and removes an Agent repository in Settings", async () => {
