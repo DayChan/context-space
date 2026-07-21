@@ -1,0 +1,37 @@
+openspec/changes/add-manual-agent-loop/design.md
+  s_aa2817e42ba2bf::t_2e5c15b9f75104 64
+openspec/changes/add-manual-agent-loop/specs/agent-human-confirmation/spec.md
+  s_aa2817e42ba2bf::t_28e696418a4fb3 6-7
+openspec/changes/add-manual-agent-loop/specs/agent-session-runtime/spec.md
+  s_aa2817e42ba2bf::t_5d0d8a6509cd56 49-55
+src/agent/contracts.ts
+  s_aa2817e42ba2bf::t_f126b90104f6e1 4-10,13-16,20-22,25-38,77
+src/agent/coordinator.ts
+  s_aa2817e42ba2bf::t_01d4e3938b13df 77-80
+src/web/App.tsx
+  s_aa2817e42ba2bf::t_ccdea9914f2bc5 1246,1272
+src/web/styles.css
+  s_aa2817e42ba2bf::t_5fbd611db83885 314-317
+tests/agent-contracts.test.ts
+  s_aa2817e42ba2bf::t_46eeb9e3ade7f0 1-63
+tests/frontend.test.tsx
+  s_aa2817e42ba2bf::t_640c8741e344f1 1067-1106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8c69bae587b95b64f6e26d1740597760653680f8",
+  "prompts": {},
+  "sessions": {
+    "s_aa2817e42ba2bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f83e0-7301-7ee0-9363-b643ac673cf7",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
