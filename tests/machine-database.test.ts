@@ -35,7 +35,10 @@ describe("MachineDatabase", () => {
         "analysis_jobs",
         "analysis_candidates",
         "acceptance_operations",
-        "markdown_documents"
+        "markdown_documents",
+        "agent_repositories",
+        "agent_sessions",
+        "agent_confirmations"
       ])
     );
     expect(

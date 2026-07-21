@@ -313,6 +313,110 @@ export interface MeegoSyncStatus {
   lastError: string | null;
 }
 
+export type AgentWorkspaceMode = "read_only" | "isolated_worktree";
+export type AgentSessionStatus = "active" | "completed" | "cancelled" | "failed";
+export type AgentAttention =
+  | "none"
+  | "confirmation_required"
+  | "reply_required"
+  | "review_required";
+export type AgentTurnStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+export type AgentOutcome =
+  | "completed"
+  | "needs_confirmation"
+  | "awaiting_reply"
+  | "blocked";
+
+export interface AgentRepository {
+  id: string;
+  name: string;
+  path: string;
+  headCommit: string;
+  branch: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentMessage {
+  id: string;
+  sessionId: string;
+  turnId: string | null;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+}
+
+export interface AgentEvent {
+  id: string;
+  sequence: number;
+  sessionId: string;
+  turnId: string | null;
+  type: string;
+  data: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AgentTurn {
+  id: string;
+  sessionId: string;
+  inputMessageId: string;
+  status: AgentTurnStatus;
+  outcome: AgentOutcome | null;
+  usage: Record<string, number> | null;
+  error: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface AgentConfirmation {
+  id: string;
+  sessionId: string;
+  turnId: string | null;
+  kind:
+    | "decision"
+    | "action_approval"
+    | "completion_review"
+    | "workspace_upgrade"
+    | "workspace_cleanup";
+  question: string;
+  options: string[];
+  status: "pending" | "answered" | "approved" | "rejected" | "expired";
+  answer: { selection?: string; text?: string } | null;
+  createdAt: string;
+  answeredAt: string | null;
+}
+
+export interface AgentSession {
+  id: string;
+  title: string;
+  sourceKind: "todo" | "meego";
+  sourceId: string;
+  repositoryId: string;
+  repository?: AgentRepository;
+  mode: AgentWorkspaceMode;
+  workspacePath: string;
+  branch: string | null;
+  baseCommit: string;
+  threadId: string | null;
+  status: AgentSessionStatus;
+  attention: AgentAttention;
+  workspaceLifecycle: "ready" | "retained" | "removed";
+  createdAt: string;
+  updatedAt: string;
+  endedAt: string | null;
+  messages?: AgentMessage[];
+  turns?: AgentTurn[];
+  events?: AgentEvent[];
+  confirmations?: AgentConfirmation[];
+}
+
 export const EMPTY_MEEGO_SYNC_STATUS: MeegoSyncStatus = {
   enabled: false,
   running: false,

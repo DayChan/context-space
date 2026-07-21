@@ -17,11 +17,15 @@ import {
   ListTodo,
   Menu,
   Plus,
+  Play,
   RefreshCw,
   Search,
+  Send,
   Settings,
   ShieldCheck,
   Sparkles,
+  Square,
+  Trash2,
   Users,
   X
 } from "lucide-react";
@@ -39,6 +43,9 @@ import {
 } from "react-router-dom";
 import type {
   BaseMetadata,
+  AgentRepository,
+  AgentSession,
+  AgentWorkspaceMode,
   KnowledgeMetadata,
   LeaderConfig,
   LoopReadiness,
@@ -490,6 +497,80 @@ function Priority({ todo }: { todo: TodoMetadata }) {
   );
 }
 
+function AgentStartDialog({
+  sourceKind,
+  sourceId,
+  title,
+  onClose
+}: {
+  sourceKind: "todo" | "meego";
+  sourceId: string;
+  title: string;
+  onClose(): void;
+}) {
+  const repositories = useApi<AgentRepository[]>("/api/agent/repositories", []);
+  const navigate = useNavigate();
+  const [prompt, setPrompt] = useState(title);
+  const [repositoryId, setRepositoryId] = useState("");
+  const [mode, setMode] = useState<AgentWorkspaceMode>("read_only");
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState("");
+
+  const effectiveRepositoryId = repositoryId || repositories.data[0]?.id || "";
+
+  async function start(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setStarting(true);
+    setError("");
+    try {
+      const session = await api<AgentSession>("/api/agent/sessions", {
+        method: "POST",
+        body: JSON.stringify({ sourceKind, sourceId, repositoryId: effectiveRepositoryId, mode, prompt })
+      });
+      onClose();
+      navigate(`/loop?session=${encodeURIComponent(session.id)}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  return (
+    <div className="agent-dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <form className="agent-dialog" aria-label="启动 Agent" onMouseDown={(event) => event.stopPropagation()} onSubmit={start} role="dialog">
+        <div className="agent-dialog-head">
+          <div><span>Manual Loop</span><h2>开始 Agent 干活</h2></div>
+          <button aria-label="关闭启动 Agent" onClick={onClose} type="button"><X size={18} /></button>
+        </div>
+        <label><span>任务说明</span><textarea aria-label="Agent 任务说明" onChange={(event) => setPrompt(event.target.value)} required value={prompt} /></label>
+        <label><span>代码仓库</span>
+          <select aria-label="Agent 代码仓库" onChange={(event) => setRepositoryId(event.target.value)} required value={effectiveRepositoryId}>
+            <option value="">选择已注册仓库</option>
+            {repositories.data.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.path}</option>)}
+          </select>
+        </label>
+        {!repositories.loading && !repositories.data.length && <div className="info-banner">尚未注册仓库，请先到 <Link to="/settings">Settings</Link> 添加。</div>}
+        <fieldset className="agent-mode-options">
+          <legend>工作模式</legend>
+          <label><input checked={mode === "read_only"} name="agent-mode" onChange={() => setMode("read_only")} type="radio" /><span><strong>只读分析</strong><small>直接读取原仓库，强制只读，不创建 worktree</small></span></label>
+          <label><input checked={mode === "isolated_worktree"} name="agent-mode" onChange={() => setMode("isolated_worktree")} type="radio" /><span><strong>隔离开发</strong><small>固定当前基线，创建会话专属分支和 worktree</small></span></label>
+        </fieldset>
+        <ErrorBanner message={error || repositories.error} />
+        <div className="agent-dialog-actions"><button className="secondary-button" onClick={onClose} type="button">取消</button><button className="primary-button" disabled={starting || !effectiveRepositoryId} type="submit"><Play size={16} />{starting ? "正在启动…" : "开始干活"}</button></div>
+      </form>
+    </div>
+  );
+}
+
+function AgentStartButton({ sourceKind, sourceId, title, disabled = false }: { sourceKind: "todo" | "meego"; sourceId: string; title: string; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  return <>
+    <button aria-label={`开始 Agent 干活：${title}`} className="agent-start-button" disabled={disabled} onClick={() => setOpen(true)} type="button"><Play size={14} />Agent</button>
+    {open && <AgentStartDialog onClose={() => setOpen(false)} sourceId={sourceId} sourceKind={sourceKind} title={title} />}
+  </>;
+}
+
 function TodoRow({
   todo,
   compact = false,
@@ -553,6 +634,12 @@ function TodoRow({
         {!compact && <Priority todo={{ ...todo, status }} />}
         <ChevronRight size={17} className="row-arrow" />
       </Link>
+      <AgentStartButton
+        disabled={!(["open", "in_progress"].includes(status) && todo.direction !== "waiting_on_them")}
+        sourceId={todo.id}
+        sourceKind="todo"
+        title={todo.title}
+      />
       {error && <span className="todo-status-error" role="alert">{error}</span>}
     </div>
   );
@@ -591,13 +678,14 @@ function MeegoItemRow({ item }: { item: MeegoItem }) {
       <ArrowUpRight size={15} />
     </>
   );
-  return item.url ? (
-    <a className="source-row meego-row" href={item.url} rel="noreferrer" target="_blank">
-      {content}
-    </a>
-  ) : (
-    <div className="source-row meego-row">{content}</div>
-  );
+  return <div className="meego-agent-row">
+    {item.url ? (
+      <a className="source-row meego-row" href={item.url} rel="noreferrer" target="_blank">{content}</a>
+    ) : (
+      <div className="source-row meego-row">{content}</div>
+    )}
+    <AgentStartButton disabled={item.completed} sourceId={item.id} sourceKind="meego" title={item.title} />
+  </div>;
 }
 
 function ProvenanceSource({
@@ -1070,46 +1158,129 @@ function TimelinePage() {
 
 interface LoopResponse {
   enabled: boolean;
+  automaticExecutionEnabled: boolean;
   message: string;
   readiness: LoopReadiness;
+  sessions: AgentSession[];
 }
 
 function LoopPage() {
-  const { data, error } = useApi<LoopResponse>("/api/loop", {
-    enabled: false,
-    message: "Automatic execution is not enabled in V1.",
-    readiness: { futureAutomatable: [], confirmationRequired: [], blocked: [], recentRuns: [] }
+  const loop = useApi<LoopResponse>("/api/loop", {
+    enabled: true,
+    automaticExecutionEnabled: false,
+    message: "仅支持人工启动 Agent；自动执行仍未启用。",
+    readiness: { futureAutomatable: [], confirmationRequired: [], blocked: [], recentRuns: [] },
+    sessions: []
   });
-  const columns = [
-    { title: "未来可自动化", items: data.readiness.futureAutomatable, icon: Sparkles, tone: "mint", copy: "已批准、等待未来执行器" },
-    { title: "需要人工确认", items: data.readiness.confirmationRequired, icon: CircleUserRound, tone: "amber", copy: "建议存在，但必须由你确认" },
-    { title: "被条件阻塞", items: data.readiness.blocked, icon: Clock3, tone: "coral", copy: "缺少权限、输入或外部条件" },
-    { title: "最近运行", items: data.readiness.recentRuns, icon: Activity, tone: "blue", copy: "V1 不会伪造运行记录" }
-  ];
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedId = searchParams.get("session");
+  const [selectedId, setSelectedId] = useState(requestedId ?? "");
+  const [detail, setDetail] = useState<AgentSession | null>(null);
+  const [detailError, setDetailError] = useState("");
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const effectiveSelectedId = requestedId && loop.data.sessions.some(({ id }) => id === requestedId)
+    ? requestedId
+    : selectedId && loop.data.sessions.some(({ id }) => id === selectedId)
+      ? selectedId
+      : loop.data.sessions[0]?.id || "";
+  const selectedDetail = detail?.id === effectiveSelectedId ? detail : null;
+
+  useEffect(() => {
+    if (!effectiveSelectedId) return;
+    let active = true;
+    api<AgentSession>(`/api/agent/sessions/${encodeURIComponent(effectiveSelectedId)}`)
+      .then((session) => { if (active) { setDetail(session); setDetailError(""); } })
+      .catch((error) => { if (active) setDetailError(error instanceof Error ? error.message : String(error)); });
+    return () => { active = false; };
+  }, [effectiveSelectedId, loop.data.sessions]);
+
+  useEffect(() => {
+    if (typeof EventSource === "undefined") return;
+    const stream = new EventSource("/api/agent/events");
+    const reload = loop.reload;
+    const changed = () => { void reload(); };
+    stream.addEventListener("session.changed", changed);
+    return () => { stream.removeEventListener("session.changed", changed); stream.close(); };
+  }, [loop.reload]);
+
+  function selectSession(id: string) {
+    setSelectedId(id);
+    setSearchParams({ session: id });
+  }
+
+  async function send(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedDetail || !message.trim()) return;
+    setSending(true);
+    try {
+      await api(`/api/agent/sessions/${encodeURIComponent(selectedDetail.id)}/messages`, { method: "POST", body: JSON.stringify({ content: message.trim() }) });
+      setMessage("");
+      await loop.reload();
+    } finally { setSending(false); }
+  }
+
+  async function answer(confirmationId: string, selection: string) {
+    await api(`/api/agent/confirmations/${encodeURIComponent(confirmationId)}/answer`, { method: "POST", body: JSON.stringify({ selection }) });
+    await loop.reload();
+  }
+
+  async function action(name: "stop" | "accept" | "cancel" | "upgrade-workspace" | "cleanup-workspace") {
+    if (!selectedDetail) return;
+    await api(`/api/agent/sessions/${encodeURIComponent(selectedDetail.id)}/${name}`, { method: "POST", body: "{}" });
+    await loop.reload();
+  }
+
+  const attentionLabels: Record<AgentSession["attention"], string> = {
+    none: "正在执行",
+    confirmation_required: "人工确认",
+    reply_required: "等待回复",
+    review_required: "待验收"
+  };
+  const pendingConfirmations = selectedDetail?.confirmations?.filter(({ status }) => status === "pending") ?? [];
+  const lastTurn = selectedDetail?.turns?.at(-1);
   return (
     <>
-      <PageHeader eyebrow="Future automation" title="Loop" description="Todo 自动化的审核和运行工作区，从 V1 起保留位置。" />
-      <ErrorBanner message={error} />
-      <div className="loop-hero">
-        <div className="loop-visual"><span /><span /><span /><Bot size={34} /></div>
-        <div>
-          <Badge tone="purple">V1 · READ ONLY</Badge>
-          <h2>自动执行尚未启用</h2>
-          <p>当前页面只展示 readiness。没有执行端点、调度器或外部工具调用，未经确认的推断永远不会触发动作。</p>
-        </div>
-        <div className="loop-safety"><ShieldCheck size={19} /><span>Safe by construction</span></div>
-      </div>
-      <div className="loop-columns">
-        {columns.map(({ title, items, icon: Icon, tone, copy }) => (
-          <section className="loop-column" key={title}>
-            <div className="loop-column-head"><span className={`tone-${tone}`}><Icon size={17} /></span><div><strong>{title}</strong><small>{items.length} items</small></div></div>
-            {items.length ? items.map((todo: TodoMetadata) => <TodoRow compact todo={todo} key={todo.id} />) : <EmptyState icon={Icon} title="暂无项目" description={copy} />}
-          </section>
-        ))}
-      </div>
-      <div className="automation-contract">
-        <div><FileText size={19} /><div><strong>Automation contract 已预留</strong><span>mode · handler · confirmation · allowed capabilities</span></div></div>
-        <Badge tone="neutral">execution_enabled: false</Badge>
+      <PageHeader eyebrow="Manual agent workspace" title="Loop" description="人工启动、可恢复、可对话的本地 Agent 工作台。" />
+      <ErrorBanner message={loop.error ?? detailError} />
+      <div className="info-banner"><ShieldCheck size={16} />{loop.data.message} Agent 完成不会自动修改 Todo 或 Meego。</div>
+      <div className="agent-workbench">
+        <aside className="agent-session-panel">
+          <div className="agent-panel-heading"><strong>Agent 会话</strong><Badge tone="blue">{loop.data.sessions.length}</Badge></div>
+          <div className="agent-session-list">
+            {loop.data.sessions.map((session) => (
+              <button className={session.id === effectiveSelectedId ? "active" : ""} key={session.id} onClick={() => selectSession(session.id)} type="button">
+                <span><strong>{session.title}</strong><small>{session.repository?.name ?? session.repositoryId} · {formatDate(session.updatedAt)}</small></span>
+                <Badge tone={session.attention === "confirmation_required" ? "amber" : session.status === "active" ? "mint" : "neutral"}>{session.status === "active" ? attentionLabels[session.attention] : session.status}</Badge>
+              </button>
+            ))}
+            {!loop.data.sessions.length && <EmptyState icon={Bot} title="还没有 Agent 会话" description="从 Todo 或 Meego 手动启动。" />}
+          </div>
+        </aside>
+        <main className="agent-conversation-panel">
+          {selectedDetail ? <>
+            <div className="agent-panel-heading"><div><strong>{selectedDetail.title}</strong><small>{lastTurn?.status ?? selectedDetail.attention}</small></div>{lastTurn?.status === "running" && <Badge tone="mint">Running</Badge>}</div>
+            <div className="agent-messages">
+              {selectedDetail.messages?.map((entry) => <article className={`agent-message role-${entry.role}`} key={entry.id}><span>{entry.role === "assistant" ? "Agent" : entry.role === "user" ? "你" : "系统"}</span><p>{entry.content}</p><small>{formatDate(entry.createdAt)}</small></article>)}
+              {selectedDetail.events?.filter(({ type }) => type.includes("command_execution") || type.includes("file_change")).map((event) => <article className="agent-event" key={event.id}><code>{event.type.includes("command") ? String(event.data.command ?? "命令执行") : "文件修改"}</code><small>{String(event.data.status ?? "")}</small></article>)}
+            </div>
+            {pendingConfirmations.map((confirmation) => <section className="agent-confirmation" key={confirmation.id}><CircleUserRound size={18} /><div><strong>需要人工确认</strong><p>{confirmation.question}</p><div>{confirmation.options.map((option) => <button className="secondary-button" key={option} onClick={() => void answer(confirmation.id, option)} type="button">{option === "approve" ? "批准" : option === "reject" ? "拒绝" : option}</button>)}</div></div></section>)}
+            <form className="agent-composer" onSubmit={send}><textarea aria-label="发送给 Agent" onChange={(event) => setMessage(event.target.value)} placeholder="继续和 Agent 对话…" value={message} /><button className="primary-button" disabled={sending || !message.trim() || selectedDetail.status !== "active"} type="submit"><Send size={16} />发送</button></form>
+          </> : <EmptyState icon={Bot} title="选择一个 Agent 会话" description="查看执行过程、对话和人工确认。" />}
+        </main>
+        <aside className="agent-context-panel">
+          {selectedDetail && <>
+            <div className="agent-panel-heading"><strong>工作上下文</strong></div>
+            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>仓库</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit.slice(0, 12)}</code></div><div><span>工作区</span><code>{selectedDetail.workspacePath}</code></div></div>
+            <div className="agent-context-actions">
+              {selectedDetail.mode === "read_only" && selectedDetail.status === "active" && <button className="secondary-button" onClick={() => void action("upgrade-workspace")} type="button"><Sparkles size={15} />创建 worktree 继续</button>}
+              {lastTurn?.status === "running" && <button className="secondary-button" onClick={() => void action("stop")} type="button"><Square size={14} />停止当前 Turn</button>}
+              {selectedDetail.attention === "review_required" && selectedDetail.status === "active" && <button className="primary-button" onClick={() => void action("accept")} type="button"><Check size={15} />验收并结束</button>}
+              {selectedDetail.status === "active" && <button className="secondary-button danger" onClick={() => void action("cancel")} type="button"><X size={15} />结束会话</button>}
+              {selectedDetail.mode === "isolated_worktree" && selectedDetail.status !== "active" && selectedDetail.workspaceLifecycle !== "removed" && <button className="secondary-button danger" onClick={() => void action("cleanup-workspace")} type="button"><Trash2 size={15} />清理 worktree</button>}
+            </div>
+          </>}
+        </aside>
       </div>
     </>
   );
@@ -1256,7 +1427,7 @@ interface ConfigResponse {
     status: MeegoSyncStatus;
     readOnly: boolean;
   };
-  loop: { enabled: boolean; executionEndpoint: null };
+  loop: { enabled: boolean; automaticExecutionEnabled: boolean; executionEndpoint: string | null };
   retention: { source_body_days: number };
   analysis: {
     current_provider: string;
@@ -1298,7 +1469,7 @@ function SettingsPage() {
       status: EMPTY_MEEGO_SYNC_STATUS,
       readOnly: true
     },
-    loop: { enabled: false, executionEndpoint: null },
+    loop: { enabled: true, automaticExecutionEnabled: false, executionEndpoint: "/api/agent/sessions" },
     retention: { source_body_days: 90 },
     analysis: {
       current_provider: "codex-sdk",
@@ -1371,6 +1542,7 @@ function SettingsPage() {
     lastIncrementalAt: null,
     reconcileMilliseconds: 5 * 60 * 1000
   });
+  const agentRepositories = useApi<AgentRepository[]>("/api/agent/repositories", []);
   const [syncing, setSyncing] = useState(false);
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
@@ -1380,6 +1552,7 @@ function SettingsPage() {
   const [savingSyncSchedule, setSavingSyncSchedule] = useState(false);
   const [savingMeego, setSavingMeego] = useState(false);
   const [syncingMeego, setSyncingMeego] = useState(false);
+  const [savingAgentRepository, setSavingAgentRepository] = useState(false);
   const [retryingJob, setRetryingJob] = useState<string | null>(null);
   const [leaderQuery, setLeaderQuery] = useState("");
   const [updatingLeader, setUpdatingLeader] = useState<string | null>(null);
@@ -1653,12 +1826,49 @@ function SettingsPage() {
     }
   }
 
+  async function registerAgentRepository(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingAgentRepository(true);
+    setMessage("");
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    try {
+      await api("/api/agent/repositories", { method: "POST", body: JSON.stringify({ path: String(form.get("path") ?? "") }) });
+      formElement.reset();
+      setMessage("Agent 仓库已注册。");
+      await agentRepositories.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally { setSavingAgentRepository(false); }
+  }
+
+  async function removeAgentRepository(id: string) {
+    setMessage("");
+    try {
+      await api(`/api/agent/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setMessage("已移除仓库注册；磁盘仓库未被删除。");
+      await agentRepositories.reload();
+    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Local control" title="Settings" description="人工内容由 Markdown 管理；同步、分析和审核状态保存在本机 SQLite。" />
-      <ErrorBanner message={config.error ?? people.error ?? diagnostics.error ?? markdownStatus.error ?? syncStatusError ?? meegoStatusError} />
+      <ErrorBanner message={config.error ?? people.error ?? diagnostics.error ?? markdownStatus.error ?? syncStatusError ?? meegoStatusError ?? agentRepositories.error} />
       {message && <div className="info-banner">{message}</div>}
       <div className="settings-grid">
+        <Section title="Agent repositories" subtitle="人工 Loop 允许使用的本地 Git 仓库">
+          <form className="agent-repository-form" onSubmit={registerAgentRepository}>
+            <label className="provider-control"><span>仓库路径</span><input aria-label="Agent 仓库路径" name="path" placeholder="/absolute/path/to/repository" required /></label>
+            <button className="primary-button" disabled={savingAgentRepository} type="submit"><Plus size={16} />{savingAgentRepository ? "验证中…" : "注册仓库"}</button>
+          </form>
+          <div className="agent-repository-list">
+            {agentRepositories.data.map((repository) => <div className="setting-row" key={repository.id}><div className="setting-icon"><Bot size={18} /></div><div><strong>{repository.name}</strong><span>{repository.path}</span><small>{repository.branch ?? "detached"} · {repository.headCommit.slice(0, 12)}</small></div><button aria-label={`移除仓库 ${repository.name}`} className="icon-button" onClick={() => void removeAgentRepository(repository.id)} type="button"><Trash2 size={15} /></button></div>)}
+            {!agentRepositories.loading && !agentRepositories.data.length && <p className="muted-copy">尚未注册仓库，Todo 和 Meego 的 Agent 启动面板将不可提交。</p>}
+          </div>
+          <p className="muted-copy">只读任务直接读取原仓库；开发任务会在 Context Space 管理目录创建独立 worktree。移除注册不会删除磁盘文件。</p>
+        </Section>
+
         <Section title="Lark source" subtitle="仅用户身份、只读命令">
           <div className="setting-row">
             <div className="setting-icon"><ShieldCheck size={19} /></div>

@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  AgentRepository,
+  AgentSession,
   LeaderConfig,
   Overview,
   PersonMetadata,
@@ -241,6 +243,8 @@ let meegoStatus: MeegoSyncStatus = EMPTY_MEEGO_SYNC_STATUS;
 let owedTodoStatus: TodoMetadata["status"] = "open";
 let configuredLeaders: LeaderConfig[] = [];
 let inboxCandidates: Array<StoredCandidate & { acceptance: null }> = [];
+let agentRepositories: AgentRepository[] = [];
+let agentSessions: AgentSession[] = [];
 
 function configResponse() {
   return {
@@ -260,7 +264,7 @@ function configResponse() {
       status: meegoStatus,
       readOnly: true
     },
-    loop: { enabled: false, executionEndpoint: null },
+    loop: { enabled: true, automaticExecutionEnabled: false, executionEndpoint: "/api/agent/sessions" },
     retention: { source_body_days: 90 },
     analysis: {
       current_provider: selectedProvider,
@@ -333,6 +337,8 @@ beforeEach(() => {
   meegoStatus = EMPTY_MEEGO_SYNC_STATUS;
   owedTodoStatus = "open";
   configuredLeaders = [];
+  agentRepositories = [];
+  agentSessions = [];
   inboxCandidates = [
     {
       id: "candidate_frontend",
@@ -421,6 +427,67 @@ beforeEach(() => {
           status: { ...meegoStatus, enabled: meegoConfig.enabled },
           readOnly: true
         });
+      }
+      if (url === "/api/agent/repositories") {
+        if (init?.method === "POST") {
+          const body = JSON.parse(String(init.body ?? "{}")) as { path: string };
+          const repository: AgentRepository = {
+            id: "repo_frontend",
+            name: "context-space",
+            path: body.path,
+            headCommit: "1234567890abcdef",
+            branch: "main",
+            createdAt: "2026-07-21T00:00:00Z",
+            updatedAt: "2026-07-21T00:00:00Z"
+          };
+          agentRepositories = [repository];
+          return jsonResponse(repository, 201);
+        }
+        return jsonResponse(agentRepositories);
+      }
+      if (url.startsWith("/api/agent/repositories/") && init?.method === "DELETE") {
+        const id = decodeURIComponent(url.split("/").at(-1) ?? "");
+        agentRepositories = agentRepositories.filter((repository) => repository.id !== id);
+        return jsonResponse(null, 204);
+      }
+      if (url === "/api/agent/sessions" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as {
+          sourceKind: "todo" | "meego";
+          sourceId: string;
+          repositoryId: string;
+          mode: AgentSession["mode"];
+          prompt: string;
+        };
+        const repository = agentRepositories.find(({ id }) => id === body.repositoryId)!;
+        const session: AgentSession = {
+          id: "session_frontend",
+          title: body.sourceId === "todo_owed" ? owedTodo.title : "Q 标签需求",
+          sourceKind: body.sourceKind,
+          sourceId: body.sourceId,
+          repositoryId: body.repositoryId,
+          repository,
+          mode: body.mode,
+          workspacePath: repository.path,
+          branch: body.mode === "isolated_worktree" ? "context-space/session_frontend" : null,
+          baseCommit: repository.headCommit,
+          threadId: null,
+          status: "active",
+          attention: "none",
+          workspaceLifecycle: "ready",
+          createdAt: "2026-07-21T00:00:00Z",
+          updatedAt: "2026-07-21T00:00:00Z",
+          endedAt: null,
+          messages: [{ id: "message_frontend", sessionId: "session_frontend", turnId: "turn_frontend", role: "user", content: body.prompt, createdAt: "2026-07-21T00:00:00Z" }],
+          turns: [{ id: "turn_frontend", sessionId: "session_frontend", inputMessageId: "message_frontend", status: "queued", outcome: null, usage: null, error: null, createdAt: "2026-07-21T00:00:00Z", startedAt: null, completedAt: null }],
+          events: [],
+          confirmations: []
+        };
+        agentSessions = [session];
+        return jsonResponse(session, 202);
+      }
+      if (url.startsWith("/api/agent/sessions/")) {
+        const id = decodeURIComponent(url.split("/")[4] ?? "");
+        return jsonResponse(agentSessions.find((session) => session.id === id));
       }
       if (url.startsWith("/api/candidates/") && url.endsWith("/accept")) {
         const id = decodeURIComponent(url.split("/")[3]);
@@ -566,9 +633,11 @@ beforeEach(() => {
       }
       if (url.startsWith("/api/loop")) {
         return jsonResponse({
-          enabled: false,
-          message: "Automatic execution is not enabled in V1.",
-          readiness: overview.loopReadiness
+          enabled: true,
+          automaticExecutionEnabled: false,
+          message: "仅支持人工启动 Agent；自动执行仍未启用。",
+          readiness: overview.loopReadiness,
+          sessions: agentSessions
         });
       }
       if (url.startsWith("/api/documents/todo_owed")) {
@@ -939,14 +1008,50 @@ describe("Context Space workbench", () => {
       "href",
       "https://project.feishu.cn/demo/story/detail/101"
     );
+    await userEvent.setup().click(screen.getByRole("button", { name: "开始 Agent 干活：Q 标签需求" }));
+    expect(screen.getByRole("dialog", { name: "启动 Agent" })).toBeInTheDocument();
   });
 
-  it("keeps Loop visible and explicitly inert", async () => {
+  it("renders the manual Loop workbench without enabling automatic execution", async () => {
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/loop"]}><AppView /></MemoryRouter>);
-    expect(await screen.findByRole("heading", { name: "自动执行尚未启用" })).toBeInTheDocument();
-    expect(screen.getByText("execution_enabled: false")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /执行/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Loop" })).toBeInTheDocument();
+    expect(screen.getByText(/仅支持人工启动 Agent/)).toBeInTheDocument();
+    expect(screen.getByText("还没有 Agent 会话")).toBeInTheDocument();
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/loop", expect.anything()));
+  });
+
+  it("starts an isolated Agent session manually from a Todo", async () => {
+    agentRepositories = [{
+      id: "repo_frontend",
+      name: "context-space",
+      path: "/workspace/context-space",
+      headCommit: "1234567890abcdef",
+      branch: "main",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:00Z"
+    }];
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/todos"]}><AppView /></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "开始 Agent 干活：准备发布计划" }));
+    expect(screen.getByRole("dialog", { name: "启动 Agent" })).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: /隔离开发/ }));
+    await user.click(screen.getByRole("button", { name: "开始干活" }));
+    expect(await screen.findByRole("heading", { name: "Loop" })).toBeInTheDocument();
+    expect(await screen.findByText("隔离开发")).toBeInTheDocument();
+    expect(agentSessions).toHaveLength(1);
+    expect(agentSessions[0].mode).toBe("isolated_worktree");
+  });
+
+  it("registers and removes an Agent repository in Settings", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+    await user.type(await screen.findByLabelText("Agent 仓库路径"), "/workspace/context-space");
+    await user.click(screen.getByRole("button", { name: "注册仓库" }));
+    expect(await screen.findByText("Agent 仓库已注册。")).toBeInTheDocument();
+    expect(screen.getByText("/workspace/context-space")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "移除仓库 context-space" }));
+    expect(await screen.findByText("已移除仓库注册；磁盘仓库未被删除。")).toBeInTheDocument();
+    expect(agentRepositories).toHaveLength(0);
   });
 
   it("shows provider availability and switches future analysis runs", async () => {

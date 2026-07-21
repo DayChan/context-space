@@ -44,3 +44,4 @@ export {
   type LegacyMigrationReport
 } from "./legacy-migration";
 export { SourceRetentionWorker } from "./retention-worker";
+export { AgentRepositoryStore } from "./agent-repository";

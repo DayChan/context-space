@@ -14,7 +14,8 @@ Context Space 是一个单用户、本机运行的工作上下文系统。它通
 - 凭证、访问令牌、Prompt 原文和额外来源正文不会写入 Markdown。
 - Provider 失败不影响已经提交的来源和同步游标；分析任务在本地持久队列中有界重试，不会静默切换 Provider。
 - `workspace/` 默认不进入 Git，因为其中可能包含私人工作内容。
-- Loop 可见但不可执行；V1 没有执行端点、调度器或外部动作按钮。
+- Loop 只支持从 Todo 或 Meego 人工启动；没有自动调度，也不会自动完成上游工作项、提交、推送、合并或创建 MR。
+- 只读 Agent 强制使用原仓库的只读沙箱；可写 Agent 仅能使用 Context Space 管理的独立 worktree，且禁用网络与交互式审批。
 
 ## 环境要求
 
@@ -98,6 +99,19 @@ array_contains(all_participate_persons(), current_login_user())
 项目中已停用的类型、图表等不具备普通工作项公共字段的特殊类型会显示为“已跳过”，不计为同步失败。Q 标签模式下，不提供 `tags` 字段的工作项类型也会跳过；关闭 Q 标签模式后，只要具备名称、ID 和更新时间，这些类型仍可正常同步。
 
 Settings 和 Meego 页面均可触发独立的手动只读同步。直接调用 API 时可使用 `PUT /api/config/meego` 保存配置、`POST /api/sync/meego` 触发同步，并通过 `GET /api/sync/meego/status` 查看状态。项目或工作项类型级失败会独立展示，不会污染 Lark 同步状态。
+
+## 人工 Agent Loop
+
+Loop 当前是人工触发的本地 Agent 工作台，不是自动任务调度器。先在 Settings 的 “Agent repositories” 中注册一个本地 Git 仓库；系统会解析真实仓库根目录、当前分支和 HEAD，非 Git 路径不会保存。随后可以从未完成且可执行的 Todo 或 Meego 条目点击 `Agent`，编辑任务说明并选择仓库和工作模式：
+
+- **只读分析**：直接以仓库根目录运行，强制 `read-only` 沙箱，不创建分支或 worktree，适合调研、解释和代码审查。
+- **隔离开发**：固定启动瞬间的 HEAD 作为 `base_commit`，创建 `context-space/<session-id>` 分支和会话专属 worktree；Agent 的写权限只覆盖该 worktree。
+
+原仓库不存在“可写”模式。只读会话需要修改代码时，Loop 会先创建结构化人工确认；批准后才从该会话原始基线创建 worktree，并在同一个 Codex Thread 中继续。每个会话的消息、Turn、事件、确认、Thread ID 和工作区信息都保存在 SQLite，页面通过 SSE 刷新；服务重启时，正在运行的 Turn 会标记为中断，历史对话仍可查看并由用户发送新消息继续。
+
+Agent 的结构化终态分为需要确认、等待回复、待验收和阻塞。只有明确的确认结构才进入“人工确认”；普通追问不会靠自然语言猜测。Agent 报告完成后只进入待验收，用户验收才结束本地会话，不会自动修改 Todo/Meego，也不会自动执行 `git commit`、`git push`、合并或创建 MR。
+
+worktree 默认保留，便于人工检查和后续处理。会话结束后可以从 Loop 请求清理；系统会检查未提交修改和未合并提交，并始终要求独立确认。未批准、Git 清理失败或工作区不在 Context Space 管理目录时，worktree 与分支都会保留。
 
 ## LLM 内容分析
 

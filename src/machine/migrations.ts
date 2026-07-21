@@ -302,6 +302,102 @@ export const MACHINE_MIGRATIONS: readonly MachineMigration[] = [
         'Direct message partner'
       );
     `
+  },
+  {
+    version: 4,
+    name: "manual-agent-loop",
+    sql: `
+      CREATE TABLE agent_repositories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        head_commit TEXT NOT NULL,
+        branch TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        source_kind TEXT NOT NULL CHECK(source_kind IN ('todo', 'meego')),
+        source_id TEXT NOT NULL,
+        repository_id TEXT NOT NULL REFERENCES agent_repositories(id),
+        mode TEXT NOT NULL CHECK(mode IN ('read_only', 'isolated_worktree')),
+        workspace_path TEXT NOT NULL,
+        branch TEXT,
+        base_commit TEXT NOT NULL,
+        thread_id TEXT,
+        status TEXT NOT NULL CHECK(status IN ('active', 'completed', 'cancelled', 'failed')),
+        attention TEXT NOT NULL CHECK(attention IN ('none', 'confirmation_required', 'reply_required', 'review_required')),
+        workspace_lifecycle TEXT NOT NULL CHECK(workspace_lifecycle IN ('ready', 'retained', 'removed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        ended_at TEXT
+      );
+
+      CREATE INDEX agent_sessions_status_idx
+        ON agent_sessions(status, attention, updated_at);
+      CREATE INDEX agent_sessions_source_idx
+        ON agent_sessions(source_kind, source_id, updated_at);
+
+      CREATE TABLE agent_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        turn_id TEXT,
+        role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX agent_messages_session_idx
+        ON agent_messages(session_id, created_at);
+
+      CREATE TABLE agent_turns (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        input_message_id TEXT NOT NULL REFERENCES agent_messages(id),
+        status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'interrupted')),
+        outcome TEXT CHECK(outcome IN ('completed', 'needs_confirmation', 'awaiting_reply', 'blocked')),
+        usage_json TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT
+      );
+
+      CREATE INDEX agent_turns_claim_idx
+        ON agent_turns(session_id, status, created_at);
+
+      CREATE TABLE agent_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        turn_id TEXT REFERENCES agent_turns(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX agent_events_session_idx
+        ON agent_events(session_id, sequence);
+
+      CREATE TABLE agent_confirmations (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        turn_id TEXT REFERENCES agent_turns(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('decision', 'action_approval', 'completion_review', 'workspace_upgrade', 'workspace_cleanup')),
+        question TEXT NOT NULL,
+        options_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'answered', 'approved', 'rejected', 'expired')),
+        answer_json TEXT,
+        created_at TEXT NOT NULL,
+        answered_at TEXT
+      );
+
+      CREATE INDEX agent_confirmations_pending_idx
+        ON agent_confirmations(session_id, status, created_at);
+    `
   }
 ];
 

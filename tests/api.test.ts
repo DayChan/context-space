@@ -134,9 +134,10 @@ describe("local API", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("serves health, overview, search, and no execution endpoint", async () => {
+  it("serves health, overview, search, and only manual Loop execution", async () => {
     const health = await request(context.app).get("/api/health").expect(200);
-    expect(health.body.loopExecutionEnabled).toBe(false);
+    expect(health.body.loopExecutionEnabled).toBe(true);
+    expect(health.body.automaticLoopExecutionEnabled).toBe(false);
     await request(context.app).get("/api/overview").expect(200);
     await request(context.app).get("/api/search?q=workspace").expect(200);
     const summary = await authorized(
@@ -734,7 +735,11 @@ describe("local API", () => {
       .expect(200);
     const config = await request(context.app).get("/api/config").expect(200);
     expect(config.body.leaders).toEqual([{ person_id: "person_alice", boost: 24 }]);
-    expect(config.body.loop.executionEndpoint).toBeNull();
+    expect(config.body.loop).toMatchObject({
+      enabled: true,
+      automaticExecutionEnabled: false,
+      executionEndpoint: "/api/agent/sessions"
+    });
     expect(config.body.analysis.current_provider).toBe("codex-sdk");
     expect(config.body.analysis.providers).toHaveLength(2);
   });

@@ -1,8 +1,18 @@
 import { existsSync } from "node:fs";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
+import { AgentConflictError, AgentRequestError } from "../core/agent-errors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
+import {
+  AgentCoordinator,
+  AgentLoopService,
+  AgentSessionEvents,
+  CodexAgentRuntime,
+  GitWorkspaceService,
+  InvalidAgentRepositoryError,
+  type AgentRuntime
+} from "../agent";
 import {
   AnalysisConfigService,
   importLegacyAnalysisConfig
@@ -43,7 +53,7 @@ import {
   type MeegleCommandRunner
 } from "../adapters/meego";
 import { ContextIndex } from "../core/index";
-import { buildMeegoList } from "../core/meego";
+import { buildMeegoList, meegoItemFromSource } from "../core/meego";
 import { MarkdownIndexSync } from "../core/markdown-index-sync";
 import {
   DocumentConflictError,
@@ -68,6 +78,7 @@ import type {
 import { initializeHumanWorkspace } from "../core/workspace";
 import {
   AnalysisJobRepository,
+  AgentRepositoryStore,
   AnalysisResultRepository,
   LegacyWorkspaceMigration,
   MachineContextRepository,
@@ -184,6 +195,21 @@ const reanalysisSchema = z.union([
   reanalysisRangeSchema
 ]);
 
+const registerAgentRepositorySchema = z.object({ path: z.string().min(1).max(4_096) }).strict();
+const startAgentSessionSchema = z.object({
+  sourceKind: z.enum(["todo", "meego"]),
+  sourceId: z.string().min(1),
+  repositoryId: z.string().min(1),
+  mode: z.enum(["read_only", "isolated_worktree"]),
+  prompt: z.string().min(1).max(100_000)
+}).strict();
+const agentMessageSchema = z.object({ content: z.string().min(1).max(100_000) }).strict();
+const agentConfirmationAnswerSchema = z.object({
+  selection: z.string().min(1).max(200).optional(),
+  text: z.string().min(1).max(10_000).optional()
+}).strict().refine((value) => value.selection || value.text, "必须提供确认选项或文本回答");
+const cleanupAgentWorkspaceSchema = z.object({}).strict();
+
 export interface Runtime {
   store: MarkdownStore;
   index: ContextIndex;
@@ -193,6 +219,9 @@ export interface Runtime {
   syncScheduler: PeriodicLarkSyncScheduler;
   meegoSync: MeegoSyncService;
   meegoConfig: MeegoConfigService;
+  agentLoop: AgentLoopService;
+  agentStore: AgentRepositoryStore;
+  agentCoordinator: AgentCoordinator;
   analysisJobs: AnalysisJobRepository;
   analysisResults: AnalysisResultRepository;
   markdownIndexRepository: MarkdownIndexRepository;
@@ -213,6 +242,7 @@ export interface CreateAppOptions {
   workspaceRoot: string;
   commandRunner?: CommandRunner;
   meegleCommandRunner?: MeegleCommandRunner;
+  agentRuntime?: AgentRuntime;
   analysisProviders?: AnalysisProvider[];
   environment?: NodeJS.ProcessEnv;
   staticRoot?: string;
@@ -274,11 +304,13 @@ function requestLogPath(request: Request): string {
 }
 
 function errorStatus(error: unknown): number {
-  if (error instanceof DocumentConflictError) return 409;
+  if (error instanceof DocumentConflictError || error instanceof AgentConflictError) return 409;
   if (
     error instanceof UnsafeWorkspacePathError ||
     error instanceof InvalidDocumentError ||
-    error instanceof z.ZodError
+    error instanceof z.ZodError ||
+    error instanceof InvalidAgentRepositoryError ||
+    error instanceof AgentRequestError
   ) {
     return 400;
   }
@@ -624,6 +656,19 @@ export async function createApp(options: CreateAppOptions): Promise<{
     new MeegoAdapter(meegleRunner),
     logger
   );
+  const agentStore = new AgentRepositoryStore(database);
+  const agentEvents = new AgentSessionEvents();
+  const agentCoordinator = new AgentCoordinator(
+    agentStore,
+    options.agentRuntime ?? new CodexAgentRuntime(),
+    agentEvents,
+    logger
+  );
+  const agentLoop = new AgentLoopService(
+    agentStore,
+    new GitWorkspaceService(options.workspaceRoot),
+    agentCoordinator
+  );
 
   const runtime: Runtime = {
     store,
@@ -634,6 +679,9 @@ export async function createApp(options: CreateAppOptions): Promise<{
     syncScheduler,
     meegoSync,
     meegoConfig,
+    agentLoop,
+    agentStore,
+    agentCoordinator,
     analysisJobs,
     analysisResults,
     markdownIndexRepository,
@@ -719,7 +767,8 @@ export async function createApp(options: CreateAppOptions): Promise<{
       ok: true,
       service: "context-space",
       indexSize: index.size,
-      loopExecutionEnabled: false
+      loopExecutionEnabled: true,
+      automaticLoopExecutionEnabled: false
     });
   });
 
@@ -905,8 +954,9 @@ export async function createApp(options: CreateAppOptions): Promise<{
         readOnly: true
       },
       loop: {
-        enabled: false,
-        executionEndpoint: null
+        enabled: true,
+        automaticExecutionEnabled: false,
+        executionEndpoint: "/api/agent/sessions"
       },
       retention: {
         source_body_days: settings.getSourceRetentionDays()
@@ -1209,6 +1259,129 @@ export async function createApp(options: CreateAppOptions): Promise<{
     response.json(meegoSync.getStatus());
   });
 
+  app.get("/api/agent/repositories", (_request, response) => {
+    response.json(agentLoop.repositories());
+  });
+
+  app.post("/api/agent/repositories", async (request, response, next) => {
+    try {
+      const input = registerAgentRepositorySchema.parse(request.body);
+      response.status(201).json(await agentLoop.registerRepository(input.path));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/agent/repositories/:id", (request, response, next) => {
+    try {
+      agentLoop.removeRepository(request.params.id);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/agent/sessions", (_request, response) => {
+    response.json(agentLoop.list());
+  });
+
+  app.get("/api/agent/sessions/:id", (request, response) => {
+    const session = agentLoop.get(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Agent 会话不存在" });
+      return;
+    }
+    response.json(session);
+  });
+
+  app.post("/api/agent/sessions", async (request, response, next) => {
+    try {
+      const input = startAgentSessionSchema.parse(request.body);
+      let title: string;
+      if (input.sourceKind === "todo") {
+        const document = query.byId(input.sourceId);
+        if (!document || !isTodo(document)) throw new InvalidAgentRepositoryError("Todo 不存在");
+        if (!["open", "in_progress"].includes(document.data.status) || document.data.direction === "waiting_on_them") {
+          throw new InvalidAgentRepositoryError("该 Todo 当前不可启动 Agent");
+        }
+        title = document.data.title;
+      } else {
+        const source = machineContext.getSource(input.sourceId);
+        const item = source ? meegoItemFromSource(source) : null;
+        if (!item || item.completed) throw new InvalidAgentRepositoryError("Meego 条目不存在或已完成");
+        title = item.title;
+      }
+      response.status(202).json(await agentLoop.start({ ...input, title }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/agent/sessions/:id/messages", (request, response, next) => {
+    try {
+      const input = agentMessageSchema.parse(request.body);
+      response.status(202).json(agentLoop.send(request.params.id, input.content));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/agent/confirmations/:id/answer", async (request, response, next) => {
+    try {
+      response.json(await agentLoop.answer(
+        request.params.id,
+        agentConfirmationAnswerSchema.parse(request.body)
+      ));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/agent/sessions/:id/stop", (request, response) => {
+    response.json({ stopped: agentLoop.stop(request.params.id) });
+  });
+
+  app.post("/api/agent/sessions/:id/accept", (request, response, next) => {
+    try { response.json(agentLoop.accept(request.params.id)); }
+    catch (error) { next(error); }
+  });
+
+  app.post("/api/agent/sessions/:id/cancel", (request, response, next) => {
+    try { response.json(agentLoop.cancel(request.params.id)); }
+    catch (error) { next(error); }
+  });
+
+  app.post("/api/agent/sessions/:id/upgrade-workspace", async (request, response, next) => {
+    try { response.json(await agentLoop.upgrade(request.params.id)); }
+    catch (error) { next(error); }
+  });
+
+  app.post("/api/agent/sessions/:id/cleanup-workspace", async (request, response, next) => {
+    try {
+      cleanupAgentWorkspaceSchema.parse(request.body ?? {});
+      response.json(await agentLoop.cleanup(request.params.id));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/agent/events", (request, response) => {
+    response.setHeader("Content-Type", "text/event-stream");
+    response.setHeader("Cache-Control", "no-cache, no-transform");
+    response.setHeader("Connection", "keep-alive");
+    response.flushHeaders();
+    response.write("event: ready\ndata: {}\n\n");
+    const unsubscribe = agentEvents.subscribe((sessionId) => {
+      response.write(`event: session.changed\ndata: ${JSON.stringify({ sessionId })}\n\n`);
+    });
+    const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), 20_000);
+    heartbeat.unref();
+    request.once("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
+
   app.get("/api/loop", async (_request, response) => {
     const overview = buildOverview(
       query.all(),
@@ -1216,9 +1389,11 @@ export async function createApp(options: CreateAppOptions): Promise<{
       sync.getStatus()
     );
     response.json({
-      enabled: false,
-      message: "Automatic execution is not enabled in V1.",
-      readiness: overview.loopReadiness
+      enabled: true,
+      automaticExecutionEnabled: false,
+      message: "仅支持人工启动 Agent；自动执行仍未启用。",
+      readiness: overview.loopReadiness,
+      sessions: agentLoop.list()
     });
   });
 

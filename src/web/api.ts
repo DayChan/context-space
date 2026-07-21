@@ -32,6 +32,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers
     }
   });
+  if (response.status === 204) return undefined as T;
   const payload = (await response.json()) as T & { error?: string };
   if (!response.ok) {
     throw new Error(payload.error ?? `Request failed with status ${response.status}`);
