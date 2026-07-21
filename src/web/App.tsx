@@ -364,7 +364,9 @@ function LarkSyncIssues({ status }: { status: SyncStatus }) {
         const consoleUrl = safeExternalUrl(issue?.console_url);
         const troubleshooter = safeExternalUrl(issue?.troubleshooter);
         const title =
-          issue?.kind === "permission"
+          issue?.kind === "installation"
+            ? "需要安装 lark-cli"
+            : issue?.kind === "permission"
             ? "需要处理飞书权限"
             : issue?.kind === "authentication"
               ? "需要重新认证飞书"

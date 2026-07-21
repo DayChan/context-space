@@ -38,6 +38,23 @@ function code(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
 
+function isExecutableNotFound(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+function installationIssue(): LarkSyncIssue {
+  return {
+    kind: "installation",
+    requires_action: true,
+    message: "未检测到 lark-cli 可执行文件。",
+    hint: "请运行 npm install -g @larksuite/cli 安装，确认 lark-cli 已加入 PATH，然后运行 lark-cli auth login 完成认证。"
+  };
+}
+
 function stringList(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.flatMap((entry) => (text(entry) ? [text(entry)!] : []));
@@ -137,6 +154,7 @@ export function parseLarkCliIssue(value: unknown): LarkSyncIssue | null {
 
 export function formatLarkCliIssue(issue: LarkSyncIssue): string {
   const labels: Record<LarkSyncIssueKind, string> = {
+    installation: "缺少 lark-cli",
     permission: "飞书权限不足",
     authentication: "飞书认证需要处理",
     invalid_parameters: "飞书请求参数无效",
@@ -241,6 +259,8 @@ export class LarkCliCommandRunner implements CommandRunner {
       const issue =
         error instanceof LarkCliCommandError
           ? error.issue
+          : isExecutableNotFound(error)
+          ? installationIssue()
           : parseLarkCliIssue(processError.stderr) ??
             parseLarkCliIssue(processError.stdout);
       const normalizedError = error instanceof LarkCliCommandError

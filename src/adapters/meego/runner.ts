@@ -37,6 +37,14 @@ function record(value: unknown): JsonRecord {
     : {};
 }
 
+function isExecutableNotFound(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
 function parseJsonOutput(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
@@ -137,6 +145,12 @@ export class MeegleCliCommandRunner implements MeegleCommandRunner {
       this.logger.info("meego.cli.completed", { command });
       return parsed;
     } catch (error) {
+      if (isExecutableNotFound(error)) {
+        throw new MeegleCliError(
+          "未检测到 Meego CLI（命令：meegle）。请运行 npm install -g @lark-project/meegle 安装，确认 meegle 已加入 PATH，然后运行 meegle auth login 完成认证。",
+          "CLI_NOT_FOUND"
+        );
+      }
       if (error instanceof MeegleCliError) throw error;
       const processError = error as { stdout?: unknown; stderr?: unknown; message?: unknown };
       for (const output of [processError.stdout, processError.stderr]) {

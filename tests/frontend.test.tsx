@@ -1496,4 +1496,50 @@ describe("Context Space workbench", () => {
       await screen.findByText("同步已完成，但存在需要处理的飞书权限或认证问题，请查看下方提醒。")
     ).toBeInTheDocument();
   });
+
+  it("shows CLI installation guidance when Lark or Meego executables are missing", async () => {
+    larkStatus = {
+      ...EMPTY_SYNC_STATUS,
+      last_error: "飞书同步需要人工处理",
+      results: [{
+        source: "self",
+        ok: false,
+        received: 0,
+        persisted: 0,
+        error: "缺少 lark-cli：未检测到 lark-cli 可执行文件。",
+        issue: {
+          kind: "installation",
+          requires_action: true,
+          message: "未检测到 lark-cli 可执行文件。",
+          hint: "请运行 npm install -g @larksuite/cli 安装，确认 lark-cli 已加入 PATH，然后运行 lark-cli auth login 完成认证。"
+        }
+      }]
+    };
+    meegoConfig = {
+      enabled: true,
+      qTagTimelineEnabled: false,
+      projectKeys: ["project_1"]
+    };
+    meegoStatus = {
+      ...EMPTY_MEEGO_SYNC_STATUS,
+      enabled: true,
+      lastError: "未检测到 Meego CLI（命令：meegle）。请运行 npm install -g @lark-project/meegle 安装，确认 meegle 已加入 PATH，然后运行 meegle auth login 完成认证。"
+    };
+
+    render(
+      <MemoryRouter
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+        initialEntries={["/settings"]}
+      >
+        <AppView />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(/需要安装 lark-cli/)).toBeInTheDocument();
+    expect(screen.getByText(/npm install -g @larksuite\/cli/)).toBeInTheDocument();
+    expect(screen.getByText(/lark-cli auth login/)).toBeInTheDocument();
+    expect(screen.getByText(/未检测到 Meego CLI/)).toBeInTheDocument();
+    expect(screen.getByText(/npm install -g @lark-project\/meegle/)).toBeInTheDocument();
+    expect(screen.getByText(/meegle auth login/)).toBeInTheDocument();
+  });
 });

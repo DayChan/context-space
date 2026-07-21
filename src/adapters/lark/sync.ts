@@ -21,7 +21,7 @@ import { nullLogger, withLogContext, type Logger } from "../../logging";
 import { LarkAdapter, type LarkSyncSource, splitWindows } from "./adapter";
 
 const DEFAULT_MAX_MESSAGE_PAGES_PER_WINDOW = 200;
-const DEFAULT_BACKFILL_DAYS = 30;
+const DEFAULT_BACKFILL_DAYS = 1;
 const DEFAULT_RECONCILIATION_HOURS = 1;
 const DEFAULT_WINDOW_DAYS = 7;
 const HOUR_MILLISECONDS = 60 * 60 * 1_000;
@@ -483,6 +483,7 @@ export class LarkSyncService {
             (Number(process.hrtime.bigint() - sourceStarted) / 1_000_000) * 100
           ) / 100
       });
+      if (sourceResult.issue?.kind === "installation") break;
     }
 
     const failed = results.filter(({ ok }) => !ok);

@@ -197,6 +197,7 @@ export interface SyncSourceResult {
 }
 
 export type LarkSyncIssueKind =
+  | "installation"
   | "permission"
   | "authentication"
   | "invalid_parameters"

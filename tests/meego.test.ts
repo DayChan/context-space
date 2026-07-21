@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MeegoAdapter } from "../src/adapters/meego/adapter";
 import { MeegoConfigService } from "../src/adapters/meego/config";
 import {
+  MeegleCliCommandRunner,
   MeegleCliError,
   UnsafeMeegleCommandError,
   assertReadOnlyMeegleCommand,
@@ -268,6 +269,30 @@ describe("Meegle 只读执行与同步", () => {
     expect(() => assertReadOnlyMeegleCommand(["workitem", "update"])).toThrow(
       UnsafeMeegleCommandError
     );
+  });
+
+  it("在 meegle 未安装时返回可执行的安装与认证提示", async () => {
+    const database = await testDatabase();
+    const settings = new SettingsRepository(database);
+    const config = new MeegoConfigService(settings);
+    config.update({
+      enabled: true,
+      qTagTimelineEnabled: false,
+      projectKeys: ["project_1"]
+    });
+    const sync = new MeegoSyncService(
+      new MachineContextRepository(database),
+      config,
+      new MeegoAdapter(
+        new MeegleCliCommandRunner(path.join(roots.at(-1)!, "missing-meegle"))
+      )
+    );
+
+    const status = await sync.sync();
+    expect(status.lastError).toContain("未检测到 Meego CLI（命令：meegle）");
+    expect(status.lastError).toContain("npm install -g @lark-project/meegle");
+    expect(status.lastError).toContain("meegle auth login");
+    expect(status.results).toHaveLength(0);
   });
 
   it("构造参与人 MQL、完整翻页并重试一次限流", async () => {

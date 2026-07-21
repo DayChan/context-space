@@ -317,7 +317,7 @@ describe("read-only Lark adapter", () => {
       synchronizationStart({
         previousCursor: "2026-07-18T12:00:00Z",
         now,
-        backfillDays: 30,
+        backfillDays: 1,
         reconciliationHours: 1
       }).toISOString()
     ).toBe("2026-07-18T12:00:00.000Z");
@@ -325,7 +325,7 @@ describe("read-only Lark adapter", () => {
       synchronizationStart({
         previousCursor: "2026-07-21T11:00:00Z",
         now,
-        backfillDays: 30,
+        backfillDays: 1,
         reconciliationHours: 1
       }).toISOString()
     ).toBe("2026-07-21T11:00:00.000Z");
@@ -333,15 +333,15 @@ describe("read-only Lark adapter", () => {
       synchronizationStart({
         previousCursor: null,
         now,
-        backfillDays: 30,
+        backfillDays: 1,
         reconciliationHours: 1
       }).toISOString()
-    ).toBe("2026-06-21T12:00:00.000Z");
+    ).toBe("2026-07-20T12:00:00.000Z");
   });
 
   it("loads initial backfill and reconciliation defaults from the environment", () => {
     expect(syncOptionsFromEnvironment({})).toEqual({
-      backfillDays: 30,
+      backfillDays: 1,
       reconciliationHours: 1
     });
     expect(
@@ -879,6 +879,29 @@ describe("read-only Lark adapter", () => {
       }
     });
     expect(result.result.error).toContain("飞书权限不足");
+  });
+
+  it("maps a missing lark-cli executable into actionable installation guidance", async () => {
+    const runner = new LarkCliCommandRunner(
+      path.join(root, "missing-lark-cli")
+    );
+    const sync = await createTestSync(root, new LarkAdapter(runner));
+    const status = await sync.sync({ now: new Date("2026-07-21T00:00:00Z") });
+
+    expect(status.results).toHaveLength(1);
+    expect(status.results[0]).toMatchObject({
+      source: "self",
+      ok: false,
+      issue: {
+        kind: "installation",
+        requires_action: true,
+        message: "未检测到 lark-cli 可执行文件。",
+        hint: expect.stringContaining("npm install -g @larksuite/cli")
+      }
+    });
+    expect(status.results[0].error).toContain("缺少 lark-cli");
+    expect(status.results[0].issue?.hint).toContain("lark-cli auth login");
+    expect(status.last_error).toContain("飞书同步需要人工处理");
   });
 
   it("logs lark-cli command metadata and structured issues without raw output", async () => {

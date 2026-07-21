@@ -58,7 +58,7 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
     data: baseline("config_workspace", "config", "Workspace", "manual", {
       locale: "zh-CN",
       timezone: "Asia/Shanghai",
-      initial_backfill_days: 30,
+      initial_backfill_days: 1,
       reconciliation_hours: 1
     }),
     body: "# Workspace\n\nLocal-first configuration for Context Space."

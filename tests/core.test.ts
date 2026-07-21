@@ -37,6 +37,7 @@ describe("Markdown workspace and domain core", () => {
     const second = await store.read("config/workspace.md");
 
     expect(second.data.id).toBe("config_workspace");
+    expect(second.data.initial_backfill_days).toBe(1);
     expect(second.etag).toBe(first.etag);
     expect(await store.exists("loop/policies.md")).toBe(true);
     expect(await store.exists(".context/sync/lark-status.md")).toBe(true);
