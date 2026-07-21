@@ -1,0 +1,66 @@
+.gitignore
+  h_969d39e0df1452 12
+README.md
+  s_fb5de37e147c86::t_617dd3415a110c 3,23,80-100
+openspec/changes/add-meego-context-sync/.openspec.yaml
+  s_fb5de37e147c86::t_4214e4d57eaf20 1-2
+openspec/changes/add-meego-context-sync/design.md
+  s_fb5de37e147c86::t_eea5455923b058 1-64
+openspec/changes/add-meego-context-sync/proposal.md
+  s_fb5de37e147c86::t_bcf2a26cc811e3 1-27
+openspec/changes/add-meego-context-sync/specs/context-workbench-ui/spec.md
+  s_fb5de37e147c86::t_8218ee0be66eff 1-38
+openspec/changes/add-meego-context-sync/specs/meego-context-sync/spec.md
+  s_fb5de37e147c86::t_f10771a9af52c6 1-78
+openspec/changes/add-meego-context-sync/tasks.md
+  s_fb5de37e147c86::t_982ad00ac190af 1-23
+src/adapters/meego/adapter.ts
+  s_fb5de37e147c86::t_8def50aff1e9c5 1-389
+src/adapters/meego/config.ts
+  s_fb5de37e147c86::t_7bb196b6c0a4e5 1-50
+src/adapters/meego/index.ts
+  s_fb5de37e147c86::t_eba40e3856b935 1-11
+src/adapters/meego/runner.ts
+  s_fb5de37e147c86::t_41cea7c8b02d82 1-158
+src/adapters/meego/sync.ts
+  s_fb5de37e147c86::t_30b9da5d97116b 1-192
+src/core/meego.ts
+  s_fb5de37e147c86::t_5ae45df922f75c 1-138
+src/core/types.ts
+  s_fb5de37e147c86::t_32be62745f901f 127-135,145,156,254-324
+src/server/app.ts
+  s_fb5de37e147c86::t_dd2b09aee528ef 38-44,46,194-195,215,521,618-626,635-636,902-906,939-943,1191-1211
+src/web/App.tsx
+  s_fb5de37e147c86::t_e1f65826285922 45-48,58,166,576-602,1118-1237,1254-1258,1292-1300,1355-1362,1381-1382,1606-1655,1659,1733-1799,2372
+src/web/styles.css
+  s_fb5de37e147c86::t_0cfeddf6f3ac75 170-173,304-305,307-314
+tests/api.test.ts
+  s_fb5de37e147c86::t_6383de5cbc2562 158-214
+tests/frontend.test.tsx
+  s_fb5de37e147c86::t_1d8e1df04c161f 15-21,235-240,258-262,328-333,417-424,441-492,727,892-943
+tests/meego.test.ts
+  s_fb5de37e147c86::t_bf5235909d1b6a 1-419
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4fe98214bb416f30a82cef1eb460550842a2f834",
+  "prompts": {},
+  "humans": {
+    "h_969d39e0df1452": {
+      "author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_fb5de37e147c86": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8372-48bc-7a92-9191-3bc259af44fa",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
