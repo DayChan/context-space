@@ -314,6 +314,7 @@ export interface MeegoSyncStatus {
 }
 
 export type AgentWorkspaceMode = "read_only" | "isolated_worktree";
+export type AgentWorkflowKind = "direct" | "openspec";
 export type AgentSessionStatus = "active" | "completed" | "cancelled" | "failed";
 export type AgentAttention =
   | "none"
@@ -402,6 +403,7 @@ export interface AgentSession {
   repositoryId: string;
   repository?: AgentRepository;
   mode: AgentWorkspaceMode;
+  workflowKind: AgentWorkflowKind;
   workspacePath: string;
   branch: string | null;
   baseCommit: string | null;
@@ -416,6 +418,38 @@ export interface AgentSession {
   turns?: AgentTurn[];
   events?: AgentEvent[];
   confirmations?: AgentConfirmation[];
+}
+
+export interface OpenSpecReadiness {
+  initialized: boolean;
+  skillsReady: boolean;
+  ready: boolean;
+  missing: string[];
+}
+
+export interface OpenSpecChangeSummary {
+  name: string;
+  completedTasks: number;
+  totalTasks: number;
+  status: string;
+  lastModified: string;
+}
+
+export interface OpenSpecWorkflowNode {
+  id: string;
+  description: string;
+  outputPath: string;
+  requires: string[];
+  status: "done" | "ready" | "blocked";
+  missingDeps: string[];
+}
+
+export interface OpenSpecWorkflow {
+  changeName: string;
+  schemaName: string;
+  relativePath: string;
+  isComplete: boolean;
+  nodes: OpenSpecWorkflowNode[];
 }
 
 export const EMPTY_MEEGO_SYNC_STATUS: MeegoSyncStatus = {

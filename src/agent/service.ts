@@ -1,15 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { AgentConflictError, AgentRequestError } from "../core/agent-errors";
-import type { AgentSession, AgentWorkspaceMode } from "../core/types";
+import type { AgentSession, AgentWorkflowKind, AgentWorkspaceMode } from "../core/types";
 import { AgentRepositoryStore } from "../machine";
 import { AgentCoordinator } from "./coordinator";
 import { GitWorkspaceService } from "./git-workspace";
+import { isOpenSpecChangeName, OpenSpecInspector } from "./openspec";
+
+function openSpecPrompt(prompt: string): string {
+  const trimmed = prompt.trim();
+  return /^(?:\$|\/)openspec-explore(?:\s|$)/.test(trimmed)
+    ? trimmed
+    : `$openspec-explore\n\n${trimmed}`;
+}
 
 export class AgentLoopService {
   constructor(
     private readonly store: AgentRepositoryStore,
     private readonly workspaces: GitWorkspaceService,
-    private readonly coordinator: AgentCoordinator
+    private readonly coordinator: AgentCoordinator,
+    private readonly openSpec: OpenSpecInspector = new OpenSpecInspector()
   ) {}
 
   async registerRepository(inputPath: string) {
@@ -23,6 +32,7 @@ export class AgentLoopService {
   async start(input: {
     title: string; sourceKind: "todo" | "meego"; sourceId: string;
     repositoryId: string; mode: AgentWorkspaceMode; prompt: string;
+    workflowKind?: AgentWorkflowKind; initializeIfMissing?: boolean;
   }): Promise<AgentSession> {
     const registered = this.store.getRepository(input.repositoryId);
     if (!registered) throw new AgentRequestError("Agent 工作目录不存在");
@@ -31,13 +41,76 @@ export class AgentLoopService {
     if (input.mode === "isolated_worktree" && repository.kind !== "git") {
       throw new AgentRequestError("普通目录仅支持只读模式，无法创建 Git worktree");
     }
+    const workflowKind = input.workflowKind ?? "direct";
+    if (workflowKind === "openspec" && (input.mode !== "isolated_worktree" || repository.kind !== "git")) {
+      throw new AgentRequestError("OpenSpec 工作流仅支持 Git 仓库的隔离开发模式");
+    }
+    if (workflowKind === "openspec" && !this.openSpec.readiness(repository.path).ready && !input.initializeIfMissing) {
+      throw new AgentConflictError("仓库尚未完成 OpenSpec 与 Agent skills 初始化");
+    }
     const sessionId = `session_${randomUUID()}`;
     const workspace = input.mode === "isolated_worktree"
       ? await this.workspaces.createWorktree(repository, sessionId, repository.headCommit)
       : { path: repository.path, branch: null, baseCommit: repository.headCommit };
-    const session = this.store.createSession({ ...input, id: sessionId, workspacePath: workspace.path,
-      branch: workspace.branch, baseCommit: workspace.baseCommit });
-    this.coordinator.schedule(session.id);
+    try {
+      if (workflowKind === "openspec" && !this.openSpec.readiness(workspace.path).ready) {
+        if (!input.initializeIfMissing) throw new AgentConflictError("隔离工作区尚未完成 OpenSpec 初始化");
+        await this.openSpec.initialize(workspace.path);
+      }
+      const session = this.store.createSession({
+        ...input,
+        prompt: workflowKind === "openspec" ? openSpecPrompt(input.prompt) : input.prompt,
+        workflowKind,
+        id: sessionId,
+        workspacePath: workspace.path,
+        branch: workspace.branch,
+        baseCommit: workspace.baseCommit
+      });
+      this.coordinator.schedule(session.id);
+      return session;
+    } catch (error) {
+      if (input.mode === "isolated_worktree" && workspace.branch && workspace.baseCommit) {
+        try {
+          await this.workspaces.removeWorktree(repository, workspace.path, workspace.branch, workspace.baseCommit, true);
+        } catch (cleanupError) {
+          const message = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          throw new AgentRequestError(`OpenSpec 会话创建失败，且临时 worktree 回滚失败：${message}`);
+        }
+      }
+      throw error;
+    }
+  }
+
+  openSpecReadiness(repositoryId: string) {
+    const repository = this.store.getRepository(repositoryId);
+    if (!repository) throw new AgentRequestError("Agent 工作目录不存在");
+    return this.openSpec.readiness(repository.path);
+  }
+
+  async openSpecChanges(sessionId: string) {
+    const session = this.openSpecSession(sessionId);
+    return this.openSpec.listChanges(session.workspacePath);
+  }
+
+  async openSpecWorkflow(sessionId: string, changeName: string) {
+    const session = this.openSpecSession(sessionId);
+    return this.openSpec.workflow(session.workspacePath, changeName);
+  }
+
+  createOpenSpecChange(sessionId: string, name: string, description: string) {
+    const session = this.openSpecSession(sessionId);
+    if (session.status !== "active") throw new AgentConflictError("Agent 会话已结束");
+    if (!isOpenSpecChangeName(name)) throw new AgentRequestError("OpenSpec change 名称必须是 kebab-case");
+    const normalizedDescription = description.trim();
+    if (!normalizedDescription) throw new AgentRequestError("OpenSpec change 说明不能为空");
+    return this.send(sessionId, `$openspec-new-change ${name}\n\n${normalizedDescription}`);
+  }
+
+  private openSpecSession(id: string): AgentSession {
+    const session = this.store.getSession(id);
+    if (!session) throw new AgentRequestError("Agent 会话不存在");
+    if (session.workflowKind !== "openspec") throw new AgentRequestError("该 Agent 会话未启用 OpenSpec 工作流");
+    if (session.workspaceLifecycle === "removed") throw new AgentRequestError("Agent 工作区已被清理");
     return session;
   }
 

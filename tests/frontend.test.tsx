@@ -9,6 +9,9 @@ import type {
   AgentSession,
   LeaderConfig,
   Overview,
+  OpenSpecChangeSummary,
+  OpenSpecReadiness,
+  OpenSpecWorkflow,
   PersonMetadata,
   SourceMetadata,
   SyncStatus,
@@ -245,6 +248,9 @@ let configuredLeaders: LeaderConfig[] = [];
 let inboxCandidates: Array<StoredCandidate & { acceptance: null }> = [];
 let agentRepositories: AgentRepository[] = [];
 let agentSessions: AgentSession[] = [];
+let openSpecReadiness: OpenSpecReadiness;
+let openSpecChanges: OpenSpecChangeSummary[] = [];
+let openSpecWorkflows: Record<string, OpenSpecWorkflow> = {};
 
 function configResponse() {
   return {
@@ -339,6 +345,9 @@ beforeEach(() => {
   configuredLeaders = [];
   agentRepositories = [];
   agentSessions = [];
+  openSpecReadiness = { initialized: true, skillsReady: true, ready: true, missing: [] };
+  openSpecChanges = [];
+  openSpecWorkflows = {};
   inboxCandidates = [
     {
       id: "candidate_frontend",
@@ -447,6 +456,9 @@ beforeEach(() => {
         }
         return jsonResponse(agentRepositories);
       }
+      if (url.includes("/api/agent/repositories/") && url.endsWith("/openspec-readiness")) {
+        return jsonResponse(openSpecReadiness);
+      }
       if (url.startsWith("/api/agent/repositories/") && init?.method === "DELETE") {
         const id = decodeURIComponent(url.split("/").at(-1) ?? "");
         agentRepositories = agentRepositories.filter((repository) => repository.id !== id);
@@ -458,6 +470,7 @@ beforeEach(() => {
           sourceId: string;
           repositoryId: string;
           mode: AgentSession["mode"];
+          workflow?: { kind: AgentSession["workflowKind"]; initializeIfMissing?: boolean };
           prompt: string;
         };
         const repository = agentRepositories.find(({ id }) => id === body.repositoryId)!;
@@ -469,6 +482,7 @@ beforeEach(() => {
           repositoryId: body.repositoryId,
           repository,
           mode: body.mode,
+          workflowKind: body.workflow?.kind ?? "direct",
           workspacePath: repository.path,
           branch: body.mode === "isolated_worktree" ? "context-space/session_frontend" : null,
           baseCommit: repository.headCommit,
@@ -479,13 +493,26 @@ beforeEach(() => {
           createdAt: "2026-07-21T00:00:00Z",
           updatedAt: "2026-07-21T00:00:00Z",
           endedAt: null,
-          messages: [{ id: "message_frontend", sessionId: "session_frontend", turnId: "turn_frontend", role: "user", content: body.prompt, createdAt: "2026-07-21T00:00:00Z" }],
+          messages: [{ id: "message_frontend", sessionId: "session_frontend", turnId: "turn_frontend", role: "user", content: body.workflow?.kind === "openspec" ? `$openspec-explore\n\n${body.prompt}` : body.prompt, createdAt: "2026-07-21T00:00:00Z" }],
           turns: [{ id: "turn_frontend", sessionId: "session_frontend", inputMessageId: "message_frontend", status: "queued", outcome: null, usage: null, error: null, createdAt: "2026-07-21T00:00:00Z", startedAt: null, completedAt: null }],
           events: [],
           confirmations: []
         };
         agentSessions = [session];
         return jsonResponse(session, 202);
+      }
+      if (/\/api\/agent\/sessions\/[^/]+\/openspec\/changes$/.test(url)) {
+        if (init?.method === "POST") {
+          const body = JSON.parse(String(init.body ?? "{}")) as { name: string; description: string };
+          openSpecChanges = [{ name: body.name, completedTasks: 0, totalTasks: 0, status: "no-tasks", lastModified: "2026-07-21T00:04:00Z" }, ...openSpecChanges];
+          openSpecWorkflows[body.name] = { changeName: body.name, schemaName: "spec-driven", relativePath: `openspec/changes/${body.name}`, isComplete: false, nodes: [{ id: "proposal", description: "Proposal", outputPath: "proposal.md", requires: [], status: "ready", missingDeps: [] }] };
+          return jsonResponse({ id: "turn_openspec_new", status: "queued" }, 202);
+        }
+        return jsonResponse(openSpecChanges);
+      }
+      if (url.includes("/openspec/changes/") && url.endsWith("/workflow")) {
+        const name = decodeURIComponent(url.split("/openspec/changes/")[1].split("/workflow")[0]);
+        return jsonResponse(openSpecWorkflows[name]);
       }
       if (url.startsWith("/api/agent/sessions/")) {
         const id = decodeURIComponent(url.split("/")[4] ?? "");
@@ -1045,6 +1072,33 @@ describe("Context Space workbench", () => {
     expect(agentSessions[0].mode).toBe("isolated_worktree");
   });
 
+  it("requires explicit OpenSpec initialization before creating an isolated session", async () => {
+    agentRepositories = [{
+      id: "repo_openspec_frontend",
+      name: "context-space",
+      path: "/workspace/context-space",
+      kind: "git",
+      headCommit: "1234567890abcdef",
+      branch: "main",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:00Z"
+    }];
+    openSpecReadiness = { initialized: false, skillsReady: false, ready: false, missing: ["openspec"] };
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/todos"]}><AppView /></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "开始 Agent 干活：准备发布计划" }));
+    await user.click(screen.getByRole("radio", { name: /隔离开发/ }));
+    await user.click(screen.getByRole("checkbox", { name: /使用 OpenSpec 工作流/ }));
+    expect(await screen.findByText("需要初始化 OpenSpec")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "开始干活" }));
+    expect(screen.getByRole("button", { name: "初始化并创建" })).toBeInTheDocument();
+    expect(agentSessions).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "初始化并创建" }));
+    expect(await screen.findByRole("heading", { name: "Loop" })).toBeInTheDocument();
+    expect(agentSessions[0]).toMatchObject({ workflowKind: "openspec", mode: "isolated_worktree" });
+    expect(agentSessions[0].messages?.[0].content).toBe("$openspec-explore\n\n准备发布计划");
+  });
+
   it("limits a plain directory to read-only Agent sessions", async () => {
     agentRepositories = [{
       id: "directory_frontend",
@@ -1083,6 +1137,7 @@ describe("Context Space workbench", () => {
       repositoryId: repository.id,
       repository,
       mode: "read_only",
+      workflowKind: "direct",
       workspacePath: repository.path,
       branch: null,
       baseCommit: repository.headCommit,
@@ -1123,6 +1178,7 @@ describe("Context Space workbench", () => {
       repositoryId: repository.id,
       repository,
       mode: "read_only",
+      workflowKind: "direct",
       workspacePath: repository.path,
       branch: null,
       baseCommit: repository.headCommit,
@@ -1173,6 +1229,67 @@ describe("Context Space workbench", () => {
     await waitFor(() => expect(vi.mocked(fetch).mock.calls).toContainEqual([
       "/api/agent/sessions/session_timeline/open-workspace",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ editor: "goland" }) })
+    ]));
+  });
+
+  it("switches OpenSpec changes and renders schema workflow progress", async () => {
+    const repository: AgentRepository = {
+      id: "repo_openspec_workflow",
+      name: "context-space",
+      path: "/workspace/context-space",
+      kind: "git",
+      headCommit: "1234567890abcdef",
+      branch: "main",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:00Z"
+    };
+    agentSessions = [{
+      id: "session_openspec_workflow",
+      title: "OpenSpec 工作流",
+      sourceKind: "todo",
+      sourceId: "todo_owed",
+      repositoryId: repository.id,
+      repository,
+      mode: "isolated_worktree",
+      workflowKind: "openspec",
+      workspacePath: "/workspace/worktree",
+      branch: "context-space/session_openspec_workflow",
+      baseCommit: repository.headCommit,
+      threadId: "thread_openspec_workflow",
+      status: "active",
+      attention: "reply_required",
+      workspaceLifecycle: "ready",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:03:00Z",
+      endedAt: null,
+      messages: [],
+      turns: [],
+      events: [],
+      confirmations: []
+    }];
+    openSpecChanges = [
+      { name: "add-auth", completedTasks: 0, totalTasks: 2, status: "in-progress", lastModified: "2026-07-21T00:02:00Z" },
+      { name: "add-cache", completedTasks: 0, totalTasks: 0, status: "no-tasks", lastModified: "2026-07-21T00:01:00Z" }
+    ];
+    openSpecWorkflows = {
+      "add-auth": { changeName: "add-auth", schemaName: "spec-driven", relativePath: "openspec/changes/add-auth", isComplete: false, nodes: [{ id: "proposal", description: "Proposal", outputPath: "proposal.md", requires: [], status: "done", missingDeps: [] }, { id: "tasks", description: "Tasks", outputPath: "tasks.md", requires: ["proposal"], status: "ready", missingDeps: [] }] },
+      "add-cache": { changeName: "add-cache", schemaName: "spec-driven", relativePath: "openspec/changes/add-cache", isComplete: false, nodes: [{ id: "proposal", description: "Proposal", outputPath: "proposal.md", requires: [], status: "ready", missingDeps: [] }] }
+    };
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/loop?session=session_openspec_workflow"]}><AppView /></MemoryRouter>);
+    expect(await screen.findByRole("region", { name: "OpenSpec Workflow" })).toBeInTheDocument();
+    expect(await screen.findByText("已完成")).toBeInTheDocument();
+    expect(screen.getByText("可继续")).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("OpenSpec Change"), "add-cache");
+    await waitFor(() => expect(screen.queryByText("已完成")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "新建 Change" }));
+    await user.type(screen.getByLabelText("Change 名称"), "add-search");
+    await user.type(screen.getByLabelText("Change 说明"), "新增搜索能力");
+    await user.click(screen.getByRole("button", { name: "调用 openspec-new-change" }));
+    expect(await screen.findByRole("option", { name: "add-search" })).toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls).toContainEqual([
+      "/api/agent/sessions/session_openspec_workflow/openspec/changes",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "add-search", description: "新增搜索能力" }) })
     ]));
   });
 

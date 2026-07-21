@@ -12,7 +12,9 @@ import {
   GitWorkspaceService,
   InvalidAgentRepositoryError,
   MacWorkspaceOpener,
+  OpenSpecInspector,
   type AgentEditor,
+  type OpenSpecCommandRunner,
   type WorkspaceOpener,
   type AgentRuntime
 } from "../agent";
@@ -204,6 +206,10 @@ const startAgentSessionSchema = z.object({
   sourceId: z.string().min(1),
   repositoryId: z.string().min(1),
   mode: z.enum(["read_only", "isolated_worktree"]),
+  workflow: z.union([
+    z.object({ kind: z.literal("direct") }).strict(),
+    z.object({ kind: z.literal("openspec"), initializeIfMissing: z.boolean() }).strict()
+  ]).default({ kind: "direct" }),
   prompt: z.string().min(1).max(100_000)
 }).strict();
 const agentMessageSchema = z.object({ content: z.string().min(1).max(100_000) }).strict();
@@ -214,6 +220,10 @@ const agentConfirmationAnswerSchema = z.object({
 const cleanupAgentWorkspaceSchema = z.object({}).strict();
 const openAgentWorkspaceSchema = z.object({
   editor: z.enum(["trae", "trae_cn", "vscode", "pycharm", "goland"])
+}).strict();
+const createOpenSpecChangeSchema = z.object({
+  name: z.string().trim().min(1).max(120).regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/),
+  description: z.string().trim().min(1).max(10_000)
 }).strict();
 
 export interface Runtime {
@@ -250,6 +260,7 @@ export interface CreateAppOptions {
   meegleCommandRunner?: MeegleCommandRunner;
   agentRuntime?: AgentRuntime;
   workspaceOpener?: WorkspaceOpener;
+  openSpecRunner?: OpenSpecCommandRunner;
   analysisProviders?: AnalysisProvider[];
   environment?: NodeJS.ProcessEnv;
   staticRoot?: string;
@@ -671,10 +682,12 @@ export async function createApp(options: CreateAppOptions): Promise<{
     agentEvents,
     logger
   );
+  const openSpecInspector = new OpenSpecInspector(options.openSpecRunner);
   const agentLoop = new AgentLoopService(
     agentStore,
     new GitWorkspaceService(options.workspaceRoot),
-    agentCoordinator
+    agentCoordinator,
+    openSpecInspector
   );
   const workspaceOpener = options.workspaceOpener ?? new MacWorkspaceOpener();
 
@@ -1319,7 +1332,12 @@ export async function createApp(options: CreateAppOptions): Promise<{
         if (!item || item.completed) throw new InvalidAgentRepositoryError("Meego 条目不存在或已完成");
         title = item.title;
       }
-      response.status(202).json(await agentLoop.start({ ...input, title }));
+      response.status(202).json(await agentLoop.start({
+        ...input,
+        title,
+        workflowKind: input.workflow.kind,
+        initializeIfMissing: input.workflow.kind === "openspec" && input.workflow.initializeIfMissing
+      }));
     } catch (error) {
       next(error);
     }
@@ -1329,6 +1347,30 @@ export async function createApp(options: CreateAppOptions): Promise<{
     try {
       const input = agentMessageSchema.parse(request.body);
       response.status(202).json(agentLoop.send(request.params.id, input.content));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/agent/repositories/:id/openspec-readiness", (request, response, next) => {
+    try { response.json(agentLoop.openSpecReadiness(request.params.id)); }
+    catch (error) { next(error); }
+  });
+
+  app.get("/api/agent/sessions/:id/openspec/changes", async (request, response, next) => {
+    try { response.json(await agentLoop.openSpecChanges(request.params.id)); }
+    catch (error) { next(error); }
+  });
+
+  app.get("/api/agent/sessions/:id/openspec/changes/:change/workflow", async (request, response, next) => {
+    try { response.json(await agentLoop.openSpecWorkflow(request.params.id, request.params.change)); }
+    catch (error) { next(error); }
+  });
+
+  app.post("/api/agent/sessions/:id/openspec/changes", (request, response, next) => {
+    try {
+      const input = createOpenSpecChangeSchema.parse(request.body);
+      response.status(202).json(agentLoop.createOpenSpecChange(request.params.id, input.name, input.description));
     } catch (error) {
       next(error);
     }

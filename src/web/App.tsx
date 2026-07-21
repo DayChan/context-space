@@ -29,7 +29,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   BrowserRouter,
@@ -51,6 +51,9 @@ import type {
   AgentSession,
   AgentTurn,
   AgentWorkspaceMode,
+  OpenSpecChangeSummary,
+  OpenSpecReadiness,
+  OpenSpecWorkflow,
   KnowledgeMetadata,
   LeaderConfig,
   LoopReadiness,
@@ -518,21 +521,60 @@ function AgentStartDialog({
   const [prompt, setPrompt] = useState(title);
   const [repositoryId, setRepositoryId] = useState("");
   const [mode, setMode] = useState<AgentWorkspaceMode>("read_only");
+  const [openSpecEnabled, setOpenSpecEnabled] = useState(false);
+  const [openSpecReadiness, setOpenSpecReadiness] = useState<OpenSpecReadiness | null>(null);
+  const [readinessRepositoryId, setReadinessRepositoryId] = useState("");
+  const [confirmInitialization, setConfirmInitialization] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
 
   const effectiveRepositoryId = repositoryId || repositories.data[0]?.id || "";
   const selectedRepository = repositories.data.find(({ id }) => id === effectiveRepositoryId);
   const canCreateWorktree = selectedRepository?.kind === "git";
+  const currentOpenSpecReadiness = readinessRepositoryId === effectiveRepositoryId
+    ? openSpecReadiness
+    : null;
+  const readinessLoading = openSpecEnabled
+    && mode === "isolated_worktree"
+    && Boolean(effectiveRepositoryId)
+    && readinessRepositoryId !== effectiveRepositoryId;
 
-  async function start(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
+    if (!openSpecEnabled || mode !== "isolated_worktree" || !effectiveRepositoryId) return;
+    let active = true;
+    api<OpenSpecReadiness>(`/api/agent/repositories/${encodeURIComponent(effectiveRepositoryId)}/openspec-readiness`)
+      .then((value) => {
+        if (active) {
+          setOpenSpecReadiness(value);
+          setReadinessRepositoryId(effectiveRepositoryId);
+        }
+      })
+      .catch((caught) => {
+        if (active) {
+          setOpenSpecReadiness(null);
+          setReadinessRepositoryId(effectiveRepositoryId);
+          setError(caught instanceof Error ? caught.message : String(caught));
+        }
+      });
+    return () => { active = false; };
+  }, [effectiveRepositoryId, mode, openSpecEnabled]);
+
+  async function createSession(initializeIfMissing: boolean) {
     setStarting(true);
     setError("");
     try {
       const session = await api<AgentSession>("/api/agent/sessions", {
         method: "POST",
-        body: JSON.stringify({ sourceKind, sourceId, repositoryId: effectiveRepositoryId, mode, prompt })
+        body: JSON.stringify({
+          sourceKind,
+          sourceId,
+          repositoryId: effectiveRepositoryId,
+          mode,
+          workflow: openSpecEnabled
+            ? { kind: "openspec", initializeIfMissing }
+            : { kind: "direct" },
+          prompt
+        })
       });
       onClose();
       navigate(`/loop?session=${encodeURIComponent(session.id)}`);
@@ -541,6 +583,15 @@ function AgentStartDialog({
     } finally {
       setStarting(false);
     }
+  }
+
+  async function start(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (openSpecEnabled && !currentOpenSpecReadiness?.ready) {
+      setConfirmInitialization(true);
+      return;
+    }
+    await createSession(false);
   }
 
   return (
@@ -554,7 +605,11 @@ function AgentStartDialog({
         <label><span>工作目录</span>
           <select aria-label="Agent 工作目录" onChange={(event) => {
             setRepositoryId(event.target.value);
-            if (repositories.data.find(({ id }) => id === event.target.value)?.kind !== "git") setMode("read_only");
+            setConfirmInitialization(false);
+            if (repositories.data.find(({ id }) => id === event.target.value)?.kind !== "git") {
+              setMode("read_only");
+              setOpenSpecEnabled(false);
+            }
           }} required value={effectiveRepositoryId}>
             <option value="">选择已注册目录</option>
             {repositories.data.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.kind === "git" ? "Git" : "普通目录"} · {repository.path}</option>)}
@@ -563,11 +618,15 @@ function AgentStartDialog({
         {!repositories.loading && !repositories.data.length && <div className="info-banner">尚未注册工作目录，请先到 <Link to="/settings">Settings</Link> 添加。</div>}
         <fieldset className="agent-mode-options">
           <legend>工作模式</legend>
-          <label><input checked={mode === "read_only"} name="agent-mode" onChange={() => setMode("read_only")} type="radio" /><span><strong>只读分析</strong><small>直接读取所选目录，强制只读，不创建 worktree</small></span></label>
-          <label><input checked={mode === "isolated_worktree"} disabled={!canCreateWorktree} name="agent-mode" onChange={() => setMode("isolated_worktree")} type="radio" /><span><strong>隔离开发</strong><small>{canCreateWorktree ? "固定当前基线，创建会话专属分支和 worktree" : "仅 Git 仓库支持独立 worktree"}</small></span></label>
+          <label><input checked={mode === "read_only"} name="agent-mode" onChange={() => { setMode("read_only"); setOpenSpecEnabled(false); setConfirmInitialization(false); }} type="radio" /><span><strong>只读分析</strong><small>直接读取所选目录，强制只读，不创建 worktree</small></span></label>
+          <label><input checked={mode === "isolated_worktree"} disabled={!canCreateWorktree} name="agent-mode" onChange={() => { setMode("isolated_worktree"); setConfirmInitialization(false); }} type="radio" /><span><strong>隔离开发</strong><small>{canCreateWorktree ? "固定当前基线，创建会话专属分支和 worktree" : "仅 Git 仓库支持独立 worktree"}</small></span></label>
         </fieldset>
+        <label className={`agent-openspec-option ${mode !== "isolated_worktree" ? "disabled" : ""}`}><input checked={openSpecEnabled} disabled={mode !== "isolated_worktree" || !canCreateWorktree} onChange={(event) => { setOpenSpecEnabled(event.target.checked); setConfirmInitialization(false); }} type="checkbox" /><span><strong>使用 OpenSpec 工作流</strong><small>首轮调用 $openspec-explore，并在会话中跟踪多个 change</small></span></label>
+        {openSpecEnabled && readinessLoading && <div className="info-banner">正在检查 OpenSpec readiness…</div>}
+        {openSpecEnabled && currentOpenSpecReadiness?.ready && <div className="info-banner"><CheckCircle2 size={15} />OpenSpec 与 Agent skills 已就绪。</div>}
+        {openSpecEnabled && currentOpenSpecReadiness && !currentOpenSpecReadiness.ready && <div className="agent-openspec-confirm"><strong>需要初始化 OpenSpec</strong><p>隔离 worktree 将生成 OpenSpec 目录和 Agent skills。拒绝初始化不会创建任务。</p>{confirmInitialization && <div><button className="secondary-button" onClick={() => setConfirmInitialization(false)} type="button">暂不创建</button><button className="primary-button" disabled={starting} onClick={() => void createSession(true)} type="button">初始化并创建</button></div>}</div>}
         <ErrorBanner message={error || repositories.error} />
-        <div className="agent-dialog-actions"><button className="secondary-button" onClick={onClose} type="button">取消</button><button className="primary-button" disabled={starting || !effectiveRepositoryId} type="submit"><Play size={16} />{starting ? "正在启动…" : "开始干活"}</button></div>
+        <div className="agent-dialog-actions"><button className="secondary-button" onClick={onClose} type="button">取消</button><button className="primary-button" disabled={starting || readinessLoading || !effectiveRepositoryId || (openSpecEnabled && !currentOpenSpecReadiness)} type="submit"><Play size={16} />{starting ? "正在启动…" : "开始干活"}</button></div>
       </form>
     </div>
   );
@@ -1252,6 +1311,97 @@ function buildAgentTimeline(session: AgentSession): AgentTimelineItem[] {
   return grouped;
 }
 
+function openSpecWorkflowLevels(nodes: OpenSpecWorkflow["nodes"]): OpenSpecWorkflow["nodes"][] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const depths = new Map<string, number>();
+  const visiting = new Set<string>();
+  const depth = (id: string): number => {
+    const known = depths.get(id);
+    if (known !== undefined) return known;
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
+    const node = byId.get(id);
+    const value = node?.requires.length
+      ? Math.max(...node.requires.filter((dependency) => byId.has(dependency)).map((dependency) => depth(dependency) + 1), 0)
+      : 0;
+    visiting.delete(id);
+    depths.set(id, value);
+    return value;
+  };
+  const levels: OpenSpecWorkflow["nodes"][] = [];
+  for (const node of nodes) (levels[depth(node.id)] ??= []).push(node);
+  return levels;
+}
+
+function OpenSpecWorkflowDetail({ sessionId, changeName, revision }: { sessionId: string; changeName: string; revision: string }) {
+  const workflow = useApi<OpenSpecWorkflow>(
+    `/api/agent/sessions/${encodeURIComponent(sessionId)}/openspec/changes/${encodeURIComponent(changeName)}/workflow`,
+    { changeName, schemaName: "", relativePath: "", isComplete: false, nodes: [] }
+  );
+  const previousRevision = useRef(revision);
+  const levels = useMemo(() => openSpecWorkflowLevels(workflow.data.nodes), [workflow.data.nodes]);
+  const reloadWorkflow = workflow.reload;
+
+  useEffect(() => {
+    if (previousRevision.current === revision) return;
+    previousRevision.current = revision;
+    const timer = window.setTimeout(() => void reloadWorkflow(), 250);
+    return () => window.clearTimeout(timer);
+  }, [revision, reloadWorkflow]);
+
+  if (workflow.error) return <div className="openspec-workflow-error">{workflow.error}</div>;
+  if (workflow.loading && !workflow.data.nodes.length) return <div className="openspec-workflow-empty">正在读取 workflow…</div>;
+  return <div className="openspec-workflow-detail"><div className="openspec-workflow-meta"><span>Schema · {workflow.data.schemaName}</span><code>{workflow.data.relativePath}</code></div><div className="openspec-workflow-nodes">{levels.map((level, index) => <div className="openspec-workflow-level" key={`level-${index}`}>{level.map((node) => <div className={`openspec-workflow-node status-${node.status}`} key={node.id}><span>{node.status === "done" ? <Check size={12} /> : node.status === "ready" ? <Play size={11} /> : <Clock3 size={11} />}</span><div><strong>{node.id}</strong><small>{node.status === "done" ? "已完成" : node.status === "ready" ? "可继续" : `等待 ${node.missingDeps.join("、")}`}</small></div><p>{node.description}</p><code>{node.outputPath}</code>{node.requires.length > 0 && <em>依赖 {node.requires.join(" + ")}</em>}</div>)}</div>)}</div></div>;
+}
+
+function OpenSpecWorkflowPanel({ session, revision }: { session: AgentSession; revision: string }) {
+  const changes = useApi<OpenSpecChangeSummary[]>(
+    `/api/agent/sessions/${encodeURIComponent(session.id)}/openspec/changes`,
+    []
+  );
+  const [selectedChange, setSelectedChange] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [changeName, setChangeName] = useState("");
+  const [description, setDescription] = useState("");
+  const [error, setError] = useState("");
+  const previousRevision = useRef(revision);
+  const reloadChanges = changes.reload;
+  const effectiveChange = changes.data.some(({ name }) => name === selectedChange)
+    ? selectedChange
+    : changes.data[0]?.name ?? "";
+
+  useEffect(() => {
+    if (previousRevision.current === revision) return;
+    previousRevision.current = revision;
+    const timer = window.setTimeout(() => void reloadChanges(), 250);
+    return () => window.clearTimeout(timer);
+  }, [revision, reloadChanges]);
+
+  async function createChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreating(true);
+    setError("");
+    try {
+      await api(`/api/agent/sessions/${encodeURIComponent(session.id)}/openspec/changes`, {
+        method: "POST",
+        body: JSON.stringify({ name: changeName.trim(), description: description.trim() })
+      });
+      setSelectedChange(changeName.trim());
+      setChangeName("");
+      setDescription("");
+      setShowCreate(false);
+      await reloadChanges();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return <section className="openspec-workflow-panel" aria-label="OpenSpec Workflow"><div className="openspec-workflow-toolbar"><button className="secondary-button" disabled={session.status !== "active"} onClick={() => setShowCreate((value) => !value)} type="button"><Plus size={13} />新建 Change</button><select aria-label="OpenSpec Change" disabled={!changes.data.length} onChange={(event) => setSelectedChange(event.target.value)} value={effectiveChange}><option value="">选择 Change</option>{changes.data.map((change) => <option key={change.name} value={change.name}>{change.name}</option>)}</select></div>{showCreate && <form className="openspec-change-form" onSubmit={createChange}><input aria-label="Change 名称" onChange={(event) => setChangeName(event.target.value)} pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" placeholder="add-feature-name" required value={changeName} /><input aria-label="Change 说明" onChange={(event) => setDescription(event.target.value)} placeholder="描述要构建或修复的内容" required value={description} /><button className="primary-button" disabled={creating} type="submit">{creating ? "排队中…" : "调用 openspec-new-change"}</button></form>}<ErrorBanner message={error || changes.error} />{effectiveChange ? <OpenSpecWorkflowDetail changeName={effectiveChange} revision={revision} sessionId={session.id} /> : !changes.loading && <div className="openspec-workflow-empty">还没有 Change，先调用 openspec-new-change 创建一个。</div>}</section>;
+}
+
 function LoopPage() {
   const loop = useApi<LoopResponse>("/api/loop", {
     enabled: true,
@@ -1346,6 +1496,12 @@ function LoopPage() {
   const pendingConfirmations = selectedDetail?.confirmations?.filter(({ status }) => status === "pending") ?? [];
   const timeline = selectedDetail ? buildAgentTimeline(selectedDetail) : [];
   const lastTurn = selectedDetail?.turns?.at(-1);
+  const workflowRevision = selectedDetail ? [
+    selectedDetail.updatedAt,
+    selectedDetail.events?.at(-1)?.sequence ?? 0,
+    lastTurn?.status ?? "",
+    lastTurn?.completedAt ?? ""
+  ].join(":") : "";
   return (
     <>
       <PageHeader eyebrow="Manual agent workspace" title="Loop" description="人工启动、可恢复、可对话的本地 Agent 工作台。" />
@@ -1367,6 +1523,7 @@ function LoopPage() {
         <main className="agent-conversation-panel">
           {selectedDetail ? <>
             <div className="agent-panel-heading"><div><strong>{selectedDetail.title}</strong><small>{lastTurn?.status ?? selectedDetail.attention}</small></div>{lastTurn?.status === "running" && <Badge tone="mint">Running</Badge>}</div>
+            {selectedDetail.workflowKind === "openspec" && <OpenSpecWorkflowPanel revision={workflowRevision} session={selectedDetail} />}
             <div className="agent-messages" data-testid="agent-timeline">
               {timeline.map((item) => {
                 if (item.kind === "message") {
@@ -1387,7 +1544,7 @@ function LoopPage() {
         <aside className="agent-context-panel">
           {selectedDetail && <>
             <div className="agent-panel-heading"><strong>工作上下文</strong></div>
-            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>Codex Session ID</span><code className="agent-session-id" title={selectedDetail.threadId ?? undefined}>{selectedDetail.threadId ?? "尚未创建"}</code></div><div><span>工作目录</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>类型</span><strong>{selectedDetail.repository?.kind === "git" ? "Git 仓库" : "普通目录"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit?.slice(0, 12) ?? "不适用"}</code></div><div><span>工作区</span><code title={selectedDetail.workspacePath}>{selectedDetail.workspacePath}</code></div></div>
+            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>工作流</span><strong>{selectedDetail.workflowKind === "openspec" ? "OpenSpec" : "直接执行"}</strong></div><div><span>Codex Session ID</span><code className="agent-session-id" title={selectedDetail.threadId ?? undefined}>{selectedDetail.threadId ?? "尚未创建"}</code></div><div><span>工作目录</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>类型</span><strong>{selectedDetail.repository?.kind === "git" ? "Git 仓库" : "普通目录"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit?.slice(0, 12) ?? "不适用"}</code></div><div><span>工作区</span><code title={selectedDetail.workspacePath}>{selectedDetail.workspacePath}</code></div></div>
             {selectedDetail.workspaceLifecycle !== "removed" && <div className="agent-editor-section"><label htmlFor="agent-editor">打开工作区</label><div><select id="agent-editor" onChange={(event) => setSelectedEditor(event.target.value as typeof selectedEditor)} value={selectedEditor}><option value="trae">Trae</option><option value="trae_cn">Trae CN</option><option value="vscode">VS Code</option><option value="pycharm">PyCharm</option><option value="goland">GoLand</option></select><button className="secondary-button" disabled={openingEditor !== null} onClick={() => void openWorkspace(selectedEditor)} type="button"><ArrowUpRight size={13} />{openingEditor ? "正在打开" : "打开"}</button></div></div>}
             <div className="agent-context-actions">
               {selectedDetail.mode === "read_only" && selectedDetail.status === "active" && <button className="secondary-button" onClick={() => void action("upgrade-workspace")} type="button"><Sparkles size={15} />创建 worktree 继续</button>}

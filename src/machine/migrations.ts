@@ -405,7 +405,16 @@ export const MACHINE_MIGRATIONS: readonly MachineMigration[] = [
     sql: `
       ALTER TABLE agent_repositories
         ADD COLUMN kind TEXT NOT NULL DEFAULT 'git'
-        CHECK(kind IN ('git', 'directory'));
+      CHECK(kind IN ('git', 'directory'));
+    `
+  },
+  {
+    version: 6,
+    name: "agent-openspec-workflow-kind",
+    sql: `
+      ALTER TABLE agent_sessions
+        ADD COLUMN workflow_kind TEXT NOT NULL DEFAULT 'direct'
+        CHECK(workflow_kind IN ('direct', 'openspec'));
     `
   }
 ];

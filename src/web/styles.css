@@ -192,6 +192,17 @@ a { color: inherit; text-decoration: none; }
 .agent-mode-options label > span { display: flex; flex-direction: column; }
 .agent-mode-options strong { font-size: 10px; }
 .agent-mode-options small { margin-top: 3px; color: #929697; font-size: 8px; line-height: 1.5; }
+.agent-dialog > .agent-openspec-option { padding: 11px; display: flex; grid-template-columns: auto 1fr; align-items: flex-start; gap: 9px; border: 1px solid #d9d0e3; border-radius: 10px; background: var(--purple-soft); cursor: pointer; }
+.agent-openspec-option.disabled { opacity: .55; cursor: not-allowed; }
+.agent-openspec-option input { margin-top: 2px; accent-color: var(--purple); }
+.agent-openspec-option > span { display: flex; flex-direction: column; }
+.agent-openspec-option strong { color: #4f3e66; font-size: 10px; }
+.agent-openspec-option small { margin-top: 3px; color: #7f718f; font-size: 8px; line-height: 1.5; }
+.agent-openspec-confirm { margin-top: 12px; padding: 11px 12px; border: 1px solid #e2c889; border-radius: 9px; color: #6d5727; background: var(--amber-soft); }
+.agent-openspec-confirm strong { font-size: 10px; }
+.agent-openspec-confirm p { margin: 5px 0 0; font-size: 9px; line-height: 1.5; }
+.agent-openspec-confirm > div { margin-top: 9px; display: flex; justify-content: flex-end; gap: 6px; }
+.agent-openspec-confirm button { min-height: 32px; padding: 0 10px; font-size: 9px; }
 .agent-dialog .error-banner, .agent-dialog .info-banner { margin: 13px 0 0; }
 .agent-dialog-actions { margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px; }
 .loop-teaser {
@@ -294,6 +305,33 @@ a { color: inherit; text-decoration: none; }
 .agent-panel-heading > div { display: flex; flex-direction: column; }
 .agent-panel-heading strong { font-size: 11px; }
 .agent-panel-heading small { margin-top: 3px; color: #96999b; font-size: 8px; }
+.openspec-workflow-panel { max-height: 190px; padding: 10px 14px; flex: 0 0 auto; overflow-y: auto; border-bottom: 1px solid #ddd7e6; background: #f7f4fa; }
+.openspec-workflow-toolbar { display: grid; grid-template-columns: auto minmax(130px, 1fr); align-items: center; gap: 7px; }
+.openspec-workflow-toolbar .secondary-button { min-height: 31px; padding: 0 10px; color: #654b8e; border-color: #d6cce1; background: #eee8f6; font-size: 9px; }
+.openspec-workflow-toolbar select, .openspec-change-form input { box-sizing: border-box; min-width: 0; height: 31px; padding: 0 8px; border: 1px solid #d8d0e1; border-radius: 8px; color: #4d4656; background: #fff; font-size: 9px; }
+.openspec-change-form { margin-top: 8px; display: grid; grid-template-columns: minmax(100px,.7fr) minmax(150px,1.4fr) auto; gap: 6px; }
+.openspec-change-form .primary-button { min-height: 31px; padding: 0 10px; font-size: 8px; }
+.openspec-workflow-panel .error-banner { margin: 8px 0 0; padding: 7px 9px; font-size: 8px; }
+.openspec-workflow-meta { margin-top: 8px; display: flex; justify-content: space-between; gap: 8px; color: #7f728d; font-size: 8px; }
+.openspec-workflow-meta code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.openspec-workflow-nodes { margin-top: 7px; display: flex; align-items: center; gap: 20px; overflow-x: auto; padding: 0 10px 2px 0; }
+.openspec-workflow-level { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.openspec-workflow-level:not(:last-child)::after { position: absolute; top: 50%; right: -15px; width: 10px; border-top: 1px solid #c7bacf; content: ""; }
+.openspec-workflow-level:not(:last-child)::before { position: absolute; top: calc(50% - 3px); right: -15px; width: 6px; height: 6px; border-top: 1px solid #c7bacf; border-right: 1px solid #c7bacf; content: ""; transform: rotate(45deg); }
+.openspec-workflow-node { position: relative; min-width: 118px; padding: 8px; display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 6px; border: 1px solid #d8d2de; border-radius: 9px; background: #fff; }
+.openspec-workflow-node > span { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 6px; color: #8b7c98; background: #eee9f2; }
+.openspec-workflow-node > div { min-width: 0; display: flex; flex-direction: column; }
+.openspec-workflow-node strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.openspec-workflow-node small { margin-top: 2px; color: #97909d; font-size: 7px; }
+.openspec-workflow-node p, .openspec-workflow-node code { grid-column: 1 / -1; margin: 0; color: #6f6877; font-size: 7px; line-height: 1.35; }
+.openspec-workflow-node code { overflow: hidden; color: #8d8197; text-overflow: ellipsis; white-space: nowrap; }
+.openspec-workflow-node em { grid-column: 1 / -1; overflow: hidden; color: #a19aa7; font-size: 7px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.openspec-workflow-node.status-done { border-color: #b9d9cf; background: #f2faf7; }
+.openspec-workflow-node.status-done > span { color: #28735f; background: var(--mint-soft); }
+.openspec-workflow-node.status-ready { border-color: #e4c886; background: #fffaf0; }
+.openspec-workflow-node.status-ready > span { color: #926322; background: var(--amber-soft); }
+.openspec-workflow-empty, .openspec-workflow-error { padding: 12px 3px 3px; color: #918a97; font-size: 8px; text-align: center; }
+.openspec-workflow-error { color: #934839; }
 .agent-session-list { width: 100%; min-width: 0; max-height: calc(650px - 59px); overflow-y: auto; display: flex; flex-direction: column; }
 .agent-session-list > button { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; padding: 12px 14px; display: flex; align-items: center; gap: 8px; border: 0; border-bottom: 1px solid #e4e1da; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .agent-session-list > button.active { background: var(--white); box-shadow: inset 3px 0 var(--coral); }

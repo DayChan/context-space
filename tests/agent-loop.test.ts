@@ -10,9 +10,11 @@ import {
   AgentLoopService,
   AgentSessionEvents,
   GitWorkspaceService,
+  OpenSpecInspector,
   type AgentRuntime,
   type AgentRuntimeInput,
   type AgentRuntimeResult,
+  type OpenSpecCommandRunner,
   type WorkspaceOpener
 } from "../src/agent";
 import type { CommandRunner } from "../src/adapters/lark/runner";
@@ -77,6 +79,34 @@ class EmptyRunner implements CommandRunner {
   }
 }
 
+class FakeOpenSpecRunner implements OpenSpecCommandRunner {
+  calls: Array<{ cwd: string; args: string[] }> = [];
+  constructor(private readonly schemaPath?: string) {}
+  async run(cwd: string, args: string[]): Promise<string> {
+    this.calls.push({ cwd, args });
+    if (args[0] === "init") {
+      await mkdir(path.join(cwd, "openspec", "changes"), { recursive: true });
+      await writeFile(path.join(cwd, "openspec", "config.yaml"), "schema: spec-driven\n", "utf8");
+      for (const skill of ["openspec-explore", "openspec-new-change"]) {
+        const skillPath = path.join(cwd, ".codex", "skills", skill);
+        await mkdir(skillPath, { recursive: true });
+        await writeFile(path.join(skillPath, "SKILL.md"), `# ${skill}\n`, "utf8");
+      }
+      return "initialized";
+    }
+    if (args[0] === "list") return JSON.stringify({ changes: [{ name: "add-auth", completedTasks: 0, totalTasks: 2, status: "in-progress", lastModified: "2026-07-21T00:00:00Z" }] });
+    if (args[0] === "status") return JSON.stringify({ changeName: args[2], schemaName: "spec-driven", isComplete: false, artifacts: [{ id: "proposal", outputPath: "proposal.md", status: "done" }, { id: "tasks", outputPath: "tasks.md", status: "ready" }] });
+    if (args[0] === "schema") return JSON.stringify({ name: "spec-driven", path: this.schemaPath });
+    throw new Error(`Unexpected OpenSpec command: ${args.join(" ")}`);
+  }
+}
+
+class FailingOpenSpecRunner implements OpenSpecCommandRunner {
+  async run(): Promise<string> {
+    throw new Error("OpenSpec init failed");
+  }
+}
+
 afterEach(async () => {
   databases.splice(0).forEach((database) => database.close());
   await Promise.all(roots.splice(0).map((root) => rm(root, {
@@ -88,6 +118,114 @@ afterEach(async () => {
 });
 
 describe.sequential("人工 Agent Loop", () => {
+  it("从 schema 和实际 artifact 状态构建 OpenSpec workflow", async () => {
+    const root = await tempRoot("context-space-openspec-inspector-");
+    const schemaPath = path.join(root, "schema");
+    await mkdir(schemaPath);
+    await writeFile(path.join(schemaPath, "schema.yaml"), `
+name: spec-driven
+version: 1
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Proposal
+    requires: []
+  - id: tasks
+    generates: tasks.md
+    description: Tasks
+    requires: [proposal]
+`, "utf8");
+    const inspector = new OpenSpecInspector(new FakeOpenSpecRunner(schemaPath));
+    await mkdir(path.join(root, "openspec", "changes"), { recursive: true });
+    await writeFile(path.join(root, "openspec", "config.yaml"), "schema: spec-driven\n", "utf8");
+    for (const skill of ["openspec-explore", "openspec-new-change"]) {
+      const skillPath = path.join(root, ".agents", "skills", skill);
+      await mkdir(skillPath, { recursive: true });
+      await writeFile(path.join(skillPath, "SKILL.md"), `# ${skill}\n`, "utf8");
+    }
+    expect(inspector.readiness(root)).toEqual({ initialized: true, skillsReady: true, ready: true, missing: [] });
+    await rm(path.join(root, ".agents", "skills", "openspec-new-change"), { recursive: true });
+    const codexSkillPath = path.join(root, ".codex", "skills", "openspec-new-change");
+    await mkdir(codexSkillPath, { recursive: true });
+    await writeFile(path.join(codexSkillPath, "SKILL.md"), "# openspec-new-change\n", "utf8");
+    expect(inspector.readiness(root).ready).toBe(true);
+    expect(await inspector.listChanges(root)).toEqual([expect.objectContaining({ name: "add-auth" })]);
+    expect(await inspector.workflow(root, "add-auth")).toEqual(expect.objectContaining({
+      schemaName: "spec-driven",
+      nodes: [
+        expect.objectContaining({ id: "proposal", status: "done", requires: [] }),
+        expect.objectContaining({ id: "tasks", status: "ready", requires: ["proposal"] })
+      ]
+    }));
+    await expect(inspector.workflow(root, "../escape")).rejects.toThrow("kebab-case");
+  });
+
+  it("仅在确认后初始化 OpenSpec worktree 并规范化首轮 Skill Prompt", async () => {
+    const root = await tempRoot("context-space-openspec-session-");
+    const repositoryPath = await createGitRepository(root);
+    const database = await openMachineDatabase(root);
+    databases.push(database);
+    const store = new AgentRepositoryStore(database);
+    const workspaces = new GitWorkspaceService(root);
+    const runtime = new FakeAgentRuntime([{ threadId: "thread_openspec", message: "已进入探索模式", outcome: "awaiting_reply", usage: null }]);
+    const coordinator = new AgentCoordinator(store, runtime, new AgentSessionEvents(), createLogger({ workspaceRoot: root, environment: { NODE_ENV: "test" } }));
+    const openspec = new OpenSpecInspector(new FakeOpenSpecRunner());
+    const service = new AgentLoopService(store, workspaces, coordinator, openspec);
+    const repository = await service.registerRepository(repositoryPath);
+
+    await expect(service.start({ title: "OpenSpec", sourceKind: "todo", sourceId: "todo_openspec", repositoryId: repository.id, mode: "isolated_worktree", workflowKind: "openspec", initializeIfMissing: false, prompt: "设计认证功能" })).rejects.toThrow("尚未完成 OpenSpec");
+    expect(service.list()).toHaveLength(0);
+    expect(await git(repositoryPath, ["branch", "--list", "context-space/*"])).toBe("");
+
+    const failingService = new AgentLoopService(
+      store,
+      workspaces,
+      coordinator,
+      new OpenSpecInspector(new FailingOpenSpecRunner())
+    );
+    await expect(failingService.start({ title: "失败初始化", sourceKind: "todo", sourceId: "todo_openspec_failed", repositoryId: repository.id, mode: "isolated_worktree", workflowKind: "openspec", initializeIfMissing: true, prompt: "设计失败场景" })).rejects.toThrow("OpenSpec init failed");
+    expect(service.list()).toHaveLength(0);
+    expect(await git(repositoryPath, ["branch", "--list", "context-space/*"])).toBe("");
+    expect(await git(repositoryPath, ["worktree", "list", "--porcelain"])).not.toContain("agent-worktrees");
+
+    const session = await service.start({ title: "OpenSpec", sourceKind: "todo", sourceId: "todo_openspec", repositoryId: repository.id, mode: "isolated_worktree", workflowKind: "openspec", initializeIfMissing: true, prompt: "设计认证功能" });
+    expect(session).toMatchObject({ workflowKind: "openspec", mode: "isolated_worktree" });
+    expect(session.messages?.[0].content).toBe("$openspec-explore\n\n设计认证功能");
+    expect(openspec.readiness(session.workspacePath).ready).toBe(true);
+    expect(service.createOpenSpecChange(session.id, "add-auth", "新增认证")).toMatchObject({ status: "queued" });
+    expect(service.get(session.id)?.messages?.at(-1)?.content).toBe("$openspec-new-change add-auth\n\n新增认证");
+    expect(() => service.createOpenSpecChange(session.id, "../escape", "非法路径")).toThrow("kebab-case");
+  }, 15_000);
+
+  it("从 HEAD 继承 .agents skills 的隔离 worktree 无需重复初始化", async () => {
+    const root = await tempRoot("context-space-openspec-agents-skills-");
+    const repositoryPath = await createGitRepository(root);
+    await mkdir(path.join(repositoryPath, "openspec", "changes"), { recursive: true });
+    await writeFile(path.join(repositoryPath, "openspec", "config.yaml"), "schema: spec-driven\n", "utf8");
+    await writeFile(path.join(repositoryPath, "openspec", "changes", ".gitkeep"), "", "utf8");
+    for (const skill of ["openspec-explore", "openspec-new-change"]) {
+      const skillPath = path.join(repositoryPath, ".agents", "skills", skill);
+      await mkdir(skillPath, { recursive: true });
+      await writeFile(path.join(skillPath, "SKILL.md"), `# ${skill}\n`, "utf8");
+    }
+    await git(repositoryPath, ["add", "openspec", ".agents"]);
+    await git(repositoryPath, ["commit", "-m", "add openspec agent skills"]);
+    const database = await openMachineDatabase(root);
+    databases.push(database);
+    const store = new AgentRepositoryStore(database);
+    const workspaces = new GitWorkspaceService(root);
+    const runtime = new FakeAgentRuntime([{ threadId: "thread_agents_skills", message: "已就绪", outcome: "awaiting_reply", usage: null }]);
+    const coordinator = new AgentCoordinator(store, runtime, new AgentSessionEvents(), createLogger({ workspaceRoot: root, environment: { NODE_ENV: "test" } }));
+    const service = new AgentLoopService(store, workspaces, coordinator, new OpenSpecInspector(new FailingOpenSpecRunner()));
+    const repository = await service.registerRepository(repositoryPath);
+
+    expect(service.openSpecReadiness(repository.id)).toEqual({ initialized: true, skillsReady: true, ready: true, missing: [] });
+    const session = await service.start({ title: "Agents skills", sourceKind: "todo", sourceId: "todo_agents_skills", repositoryId: repository.id, mode: "isolated_worktree", workflowKind: "openspec", initializeIfMissing: false, prompt: "验证通用 skills" });
+    expect(session.workflowKind).toBe("openspec");
+    expect(new OpenSpecInspector(new FailingOpenSpecRunner()).readiness(session.workspacePath).ready).toBe(true);
+    expect(session.messages?.[0].content).toBe("$openspec-explore\n\n验证通用 skills");
+  }, 15_000);
+
   it("注册仓库并为隔离开发创建和清理独立 worktree", async () => {
     const root = await tempRoot("context-space-agent-git-");
     const repositoryPath = await createGitRepository(root);
@@ -284,8 +422,25 @@ describe.sequential("人工 Agent Loop", () => {
     const repositoryPath = await createGitRepository(root);
     const plainDirectory = path.join(root, "plain-notes");
     await mkdir(plainDirectory);
+    const schemaPath = path.join(root, "api-schema");
+    await mkdir(schemaPath);
+    await writeFile(path.join(schemaPath, "schema.yaml"), `
+name: spec-driven
+version: 1
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Proposal
+    requires: []
+  - id: tasks
+    generates: tasks.md
+    description: Tasks
+    requires: [proposal]
+`, "utf8");
     const runtime = new FakeAgentRuntime([
-      { threadId: "thread_api", message: "分析完成", outcome: "completed", usage: null }
+      { threadId: "thread_api", message: "分析完成", outcome: "completed", usage: null },
+      { threadId: "thread_openspec_api", message: "探索完成", outcome: "awaiting_reply", usage: null },
+      { threadId: "thread_openspec_api", message: "Change 已创建", outcome: "awaiting_reply", usage: null }
     ]);
     const openedWorkspaces: Array<{ editor: string; path: string }> = [];
     const workspaceOpener: WorkspaceOpener = {
@@ -298,6 +453,7 @@ describe.sequential("人工 Agent Loop", () => {
       workspaceRoot: root,
       commandRunner: new EmptyRunner(),
       agentRuntime: runtime,
+      openSpecRunner: new FakeOpenSpecRunner(schemaPath),
       workspaceOpener,
       environment: { NODE_ENV: "test" }
     });
@@ -314,6 +470,9 @@ describe.sequential("人工 Agent Loop", () => {
       .set("x-context-space-csrf", csrf)
       .send({ path: repositoryPath })
       .expect(201);
+    await request(context.app)
+      .get(`/api/agent/repositories/${repository.body.id}/openspec-readiness`)
+      .expect(200, { initialized: false, skillsReady: false, ready: false, missing: ["openspec", ".codex/skills/openspec-explore 或 .agents/skills/openspec-explore", ".codex/skills/openspec-new-change 或 .agents/skills/openspec-new-change"] });
     const directory = await request(context.app)
       .post("/api/agent/repositories")
       .set("x-context-space-csrf", csrf)
@@ -352,6 +511,25 @@ describe.sequential("人工 Agent Loop", () => {
       automaticExecutionEnabled: false,
       sessions: [{ id: started.body.id }]
     });
+
+    const openSpecSession = await request(context.app)
+      .post("/api/agent/sessions")
+      .set("x-context-space-csrf", csrf)
+      .send({ sourceKind: "todo", sourceId: "agent_api", repositoryId: repository.body.id, mode: "isolated_worktree", workflow: { kind: "openspec", initializeIfMissing: true }, prompt: "规划认证功能" })
+      .expect(202);
+    expect(openSpecSession.body).toMatchObject({ workflowKind: "openspec" });
+    expect(openSpecSession.body.messages[0].content).toBe("$openspec-explore\n\n规划认证功能");
+    expect((await request(context.app)
+      .get(`/api/agent/sessions/${openSpecSession.body.id}/openspec/changes`)
+      .expect(200)).body).toEqual([expect.objectContaining({ name: "add-auth" })]);
+    expect((await request(context.app)
+      .get(`/api/agent/sessions/${openSpecSession.body.id}/openspec/changes/add-auth/workflow`)
+      .expect(200)).body).toMatchObject({ schemaName: "spec-driven", nodes: [{ id: "proposal", status: "done" }, { id: "tasks", status: "ready" }] });
+    await request(context.app)
+      .post(`/api/agent/sessions/${openSpecSession.body.id}/openspec/changes`)
+      .set("x-context-space-csrf", csrf)
+      .send({ name: "add-auth", description: "新增认证" })
+      .expect(202);
 
     const server = context.app.listen(0);
     try {
