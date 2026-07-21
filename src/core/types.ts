@@ -337,7 +337,8 @@ export interface AgentRepository {
   id: string;
   name: string;
   path: string;
-  headCommit: string;
+  kind: "git" | "directory";
+  headCommit: string | null;
   branch: string | null;
   createdAt: string;
   updatedAt: string;
@@ -403,7 +404,7 @@ export interface AgentSession {
   mode: AgentWorkspaceMode;
   workspacePath: string;
   branch: string | null;
-  baseCommit: string;
+  baseCommit: string | null;
   threadId: string | null;
   status: AgentSessionStatus;
   attention: AgentAttention;

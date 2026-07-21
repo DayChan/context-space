@@ -431,12 +431,14 @@ beforeEach(() => {
       if (url === "/api/agent/repositories") {
         if (init?.method === "POST") {
           const body = JSON.parse(String(init.body ?? "{}")) as { path: string };
+          const kind: AgentRepository["kind"] = body.path.includes("notes") ? "directory" : "git";
           const repository: AgentRepository = {
             id: "repo_frontend",
             name: "context-space",
             path: body.path,
-            headCommit: "1234567890abcdef",
-            branch: "main",
+            kind,
+            headCommit: kind === "git" ? "1234567890abcdef" : null,
+            branch: kind === "git" ? "main" : null,
             createdAt: "2026-07-21T00:00:00Z",
             updatedAt: "2026-07-21T00:00:00Z"
           };
@@ -1025,6 +1027,7 @@ describe("Context Space workbench", () => {
       id: "repo_frontend",
       name: "context-space",
       path: "/workspace/context-space",
+      kind: "git",
       headCommit: "1234567890abcdef",
       branch: "main",
       createdAt: "2026-07-21T00:00:00Z",
@@ -1042,15 +1045,34 @@ describe("Context Space workbench", () => {
     expect(agentSessions[0].mode).toBe("isolated_worktree");
   });
 
+  it("limits a plain directory to read-only Agent sessions", async () => {
+    agentRepositories = [{
+      id: "directory_frontend",
+      name: "notes",
+      path: "/workspace/notes",
+      kind: "directory",
+      headCommit: null,
+      branch: null,
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:00Z"
+    }];
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/todos"]}><AppView /></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "开始 Agent 干活：准备发布计划" }));
+    expect(screen.getByLabelText("Agent 工作目录")).toHaveValue("directory_frontend");
+    expect(screen.getByRole("radio", { name: /隔离开发/ })).toBeDisabled();
+    expect(screen.getByText("仅 Git 仓库支持独立 worktree")).toBeInTheDocument();
+  });
+
   it("registers and removes an Agent repository in Settings", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
-    await user.type(await screen.findByLabelText("Agent 仓库路径"), "/workspace/context-space");
-    await user.click(screen.getByRole("button", { name: "注册仓库" }));
-    expect(await screen.findByText("Agent 仓库已注册。")).toBeInTheDocument();
+    await user.type(await screen.findByLabelText("Agent 工作目录路径"), "/workspace/context-space");
+    await user.click(screen.getByRole("button", { name: "注册目录" }));
+    expect(await screen.findByText("Agent 工作目录已注册。")).toBeInTheDocument();
     expect(screen.getByText("/workspace/context-space")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "移除仓库 context-space" }));
-    expect(await screen.findByText("已移除仓库注册；磁盘仓库未被删除。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "移除目录 context-space" }));
+    expect(await screen.findByText("已移除工作目录注册；磁盘内容未被删除。")).toBeInTheDocument();
     expect(agentRepositories).toHaveLength(0);
   });
 

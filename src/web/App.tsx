@@ -517,6 +517,8 @@ function AgentStartDialog({
   const [error, setError] = useState("");
 
   const effectiveRepositoryId = repositoryId || repositories.data[0]?.id || "";
+  const selectedRepository = repositories.data.find(({ id }) => id === effectiveRepositoryId);
+  const canCreateWorktree = selectedRepository?.kind === "git";
 
   async function start(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -544,17 +546,20 @@ function AgentStartDialog({
           <button aria-label="关闭启动 Agent" onClick={onClose} type="button"><X size={18} /></button>
         </div>
         <label><span>任务说明</span><textarea aria-label="Agent 任务说明" onChange={(event) => setPrompt(event.target.value)} required value={prompt} /></label>
-        <label><span>代码仓库</span>
-          <select aria-label="Agent 代码仓库" onChange={(event) => setRepositoryId(event.target.value)} required value={effectiveRepositoryId}>
-            <option value="">选择已注册仓库</option>
-            {repositories.data.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.path}</option>)}
+        <label><span>工作目录</span>
+          <select aria-label="Agent 工作目录" onChange={(event) => {
+            setRepositoryId(event.target.value);
+            if (repositories.data.find(({ id }) => id === event.target.value)?.kind !== "git") setMode("read_only");
+          }} required value={effectiveRepositoryId}>
+            <option value="">选择已注册目录</option>
+            {repositories.data.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.kind === "git" ? "Git" : "普通目录"} · {repository.path}</option>)}
           </select>
         </label>
-        {!repositories.loading && !repositories.data.length && <div className="info-banner">尚未注册仓库，请先到 <Link to="/settings">Settings</Link> 添加。</div>}
+        {!repositories.loading && !repositories.data.length && <div className="info-banner">尚未注册工作目录，请先到 <Link to="/settings">Settings</Link> 添加。</div>}
         <fieldset className="agent-mode-options">
           <legend>工作模式</legend>
-          <label><input checked={mode === "read_only"} name="agent-mode" onChange={() => setMode("read_only")} type="radio" /><span><strong>只读分析</strong><small>直接读取原仓库，强制只读，不创建 worktree</small></span></label>
-          <label><input checked={mode === "isolated_worktree"} name="agent-mode" onChange={() => setMode("isolated_worktree")} type="radio" /><span><strong>隔离开发</strong><small>固定当前基线，创建会话专属分支和 worktree</small></span></label>
+          <label><input checked={mode === "read_only"} name="agent-mode" onChange={() => setMode("read_only")} type="radio" /><span><strong>只读分析</strong><small>直接读取所选目录，强制只读，不创建 worktree</small></span></label>
+          <label><input checked={mode === "isolated_worktree"} disabled={!canCreateWorktree} name="agent-mode" onChange={() => setMode("isolated_worktree")} type="radio" /><span><strong>隔离开发</strong><small>{canCreateWorktree ? "固定当前基线，创建会话专属分支和 worktree" : "仅 Git 仓库支持独立 worktree"}</small></span></label>
         </fieldset>
         <ErrorBanner message={error || repositories.error} />
         <div className="agent-dialog-actions"><button className="secondary-button" onClick={onClose} type="button">取消</button><button className="primary-button" disabled={starting || !effectiveRepositoryId} type="submit"><Play size={16} />{starting ? "正在启动…" : "开始干活"}</button></div>
@@ -1271,7 +1276,7 @@ function LoopPage() {
         <aside className="agent-context-panel">
           {selectedDetail && <>
             <div className="agent-panel-heading"><strong>工作上下文</strong></div>
-            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>仓库</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit.slice(0, 12)}</code></div><div><span>工作区</span><code>{selectedDetail.workspacePath}</code></div></div>
+            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>工作目录</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>类型</span><strong>{selectedDetail.repository?.kind === "git" ? "Git 仓库" : "普通目录"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit?.slice(0, 12) ?? "不适用"}</code></div><div><span>工作区</span><code>{selectedDetail.workspacePath}</code></div></div>
             <div className="agent-context-actions">
               {selectedDetail.mode === "read_only" && selectedDetail.status === "active" && <button className="secondary-button" onClick={() => void action("upgrade-workspace")} type="button"><Sparkles size={15} />创建 worktree 继续</button>}
               {lastTurn?.status === "running" && <button className="secondary-button" onClick={() => void action("stop")} type="button"><Square size={14} />停止当前 Turn</button>}
@@ -1835,7 +1840,7 @@ function SettingsPage() {
     try {
       await api("/api/agent/repositories", { method: "POST", body: JSON.stringify({ path: String(form.get("path") ?? "") }) });
       formElement.reset();
-      setMessage("Agent 仓库已注册。");
+      setMessage("Agent 工作目录已注册。");
       await agentRepositories.reload();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -1846,7 +1851,7 @@ function SettingsPage() {
     setMessage("");
     try {
       await api(`/api/agent/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
-      setMessage("已移除仓库注册；磁盘仓库未被删除。");
+      setMessage("已移除工作目录注册；磁盘内容未被删除。");
       await agentRepositories.reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
   }
@@ -1857,16 +1862,16 @@ function SettingsPage() {
       <ErrorBanner message={config.error ?? people.error ?? diagnostics.error ?? markdownStatus.error ?? syncStatusError ?? meegoStatusError ?? agentRepositories.error} />
       {message && <div className="info-banner">{message}</div>}
       <div className="settings-grid">
-        <Section title="Agent repositories" subtitle="人工 Loop 允许使用的本地 Git 仓库">
+        <Section title="Agent workspaces" subtitle="人工 Loop 允许使用的本地 Git 仓库或普通目录">
           <form className="agent-repository-form" onSubmit={registerAgentRepository}>
-            <label className="provider-control"><span>仓库路径</span><input aria-label="Agent 仓库路径" name="path" placeholder="/absolute/path/to/repository" required /></label>
-            <button className="primary-button" disabled={savingAgentRepository} type="submit"><Plus size={16} />{savingAgentRepository ? "验证中…" : "注册仓库"}</button>
+            <label className="provider-control"><span>工作目录路径</span><input aria-label="Agent 工作目录路径" name="path" placeholder="/absolute/path 或 ~/projects/example" required /></label>
+            <button className="primary-button" disabled={savingAgentRepository} type="submit"><Plus size={16} />{savingAgentRepository ? "验证中…" : "注册目录"}</button>
           </form>
           <div className="agent-repository-list">
-            {agentRepositories.data.map((repository) => <div className="setting-row" key={repository.id}><div className="setting-icon"><Bot size={18} /></div><div><strong>{repository.name}</strong><span>{repository.path}</span><small>{repository.branch ?? "detached"} · {repository.headCommit.slice(0, 12)}</small></div><button aria-label={`移除仓库 ${repository.name}`} className="icon-button" onClick={() => void removeAgentRepository(repository.id)} type="button"><Trash2 size={15} /></button></div>)}
-            {!agentRepositories.loading && !agentRepositories.data.length && <p className="muted-copy">尚未注册仓库，Todo 和 Meego 的 Agent 启动面板将不可提交。</p>}
+            {agentRepositories.data.map((repository) => <div className="setting-row" key={repository.id}><div className="setting-icon"><Bot size={18} /></div><div><strong>{repository.name}</strong><span>{repository.path}</span><small>{repository.kind === "git" ? `${repository.branch ?? "detached"} · ${repository.headCommit?.slice(0, 12)}` : "普通目录 · 仅支持只读"}</small></div><button aria-label={`移除目录 ${repository.name}`} className="icon-button" onClick={() => void removeAgentRepository(repository.id)} type="button"><Trash2 size={15} /></button></div>)}
+            {!agentRepositories.loading && !agentRepositories.data.length && <p className="muted-copy">尚未注册工作目录，Todo 和 Meego 的 Agent 启动面板将不可提交。</p>}
           </div>
-          <p className="muted-copy">只读任务直接读取原仓库；开发任务会在 Context Space 管理目录创建独立 worktree。移除注册不会删除磁盘文件。</p>
+          <p className="muted-copy">Git 仓库支持只读和独立 worktree；普通目录仅支持只读。路径支持 `~/` 开头。移除注册不会删除磁盘文件。</p>
         </Section>
 
         <Section title="Lark source" subtitle="仅用户身份、只读命令">

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -94,17 +94,58 @@ describe.sequential("人工 Agent Loop", () => {
     databases.push(database);
     const store = new AgentRepositoryStore(database);
     const workspaces = new GitWorkspaceService(root);
-    const inspected = await workspaces.inspectRepository(repositoryPath);
+    const inspected = await workspaces.inspectLocation(repositoryPath);
     const repository = store.addRepository(inspected);
     const workspace = await workspaces.createWorktree(repository, "session_test", inspected.headCommit);
 
     expect(workspace.path).not.toBe(repository.path);
+    expect(repository.kind).toBe("git");
     expect(workspace.branch).toBe("context-space/session_test");
     expect(await git(workspace.path, ["rev-parse", "HEAD"])).toBe(inspected.headCommit);
-    expect(await workspaces.status(repository, workspace.path, inspected.headCommit)).toEqual({ dirty: false, unmergedCommits: 0 });
+    expect(await workspaces.status(repository, workspace.path, inspected.headCommit!)).toEqual({ dirty: false, unmergedCommits: 0 });
 
-    await workspaces.removeWorktree(repository, workspace.path, workspace.branch, inspected.headCommit);
+    await workspaces.removeWorktree(repository, workspace.path, workspace.branch, inspected.headCommit!);
     expect(await git(repository.path, ["branch", "--list", workspace.branch])).toBe("");
+  }, 15_000);
+
+  it("展开 ~/ 路径并允许普通目录启动只读会话", async () => {
+    const root = await tempRoot("context-space-agent-directory-");
+    const fakeHome = path.join(root, "home");
+    const notesPath = path.join(fakeHome, "notes");
+    await mkdir(notesPath, { recursive: true });
+    const database = await openMachineDatabase(root);
+    databases.push(database);
+    const store = new AgentRepositoryStore(database);
+    const workspaces = new GitWorkspaceService(root, undefined, fakeHome);
+    const inspected = await workspaces.inspectLocation("~/notes");
+    const canonicalNotesPath = await realpath(notesPath);
+    expect(inspected).toMatchObject({ path: canonicalNotesPath, kind: "directory", headCommit: null, branch: null });
+    const repository = store.addRepository(inspected);
+    const runtime = new FakeAgentRuntime([
+      { threadId: "thread_directory", message: "只读分析完成", outcome: "completed", usage: null }
+    ]);
+    const coordinator = new AgentCoordinator(store, runtime, new AgentSessionEvents(), createLogger({ workspaceRoot: root, environment: { NODE_ENV: "test" } }));
+    const service = new AgentLoopService(store, workspaces, coordinator);
+
+    const session = await service.start({
+      title: "分析笔记",
+      sourceKind: "todo",
+      sourceId: "todo_directory",
+      repositoryId: repository.id,
+      mode: "read_only",
+      prompt: "总结目录内容"
+    });
+    const completed = await waitFor(() => service.get(session.id)!, ({ attention }) => attention === "review_required");
+    expect(completed).toMatchObject({ workspacePath: canonicalNotesPath, baseCommit: null, mode: "read_only" });
+    expect(runtime.calls[0]).toMatchObject({ workingDirectory: canonicalNotesPath, mode: "read_only" });
+    await expect(service.start({
+      title: "修改笔记",
+      sourceKind: "todo",
+      sourceId: "todo_directory_write",
+      repositoryId: repository.id,
+      mode: "isolated_worktree",
+      prompt: "修改目录内容"
+    })).rejects.toThrow("普通目录仅支持只读模式");
   }, 15_000);
 
   it("串行运行多轮会话并把结构化确认与完成验收分开", async () => {
@@ -114,7 +155,7 @@ describe.sequential("人工 Agent Loop", () => {
     databases.push(database);
     const store = new AgentRepositoryStore(database);
     const workspaces = new GitWorkspaceService(root);
-    const repository = store.addRepository(await workspaces.inspectRepository(repositoryPath));
+    const repository = store.addRepository(await workspaces.inspectLocation(repositoryPath));
     const runtime = new FakeAgentRuntime([
       {
         threadId: "thread_1",
@@ -164,7 +205,7 @@ describe.sequential("人工 Agent Loop", () => {
     databases.push(database);
     const store = new AgentRepositoryStore(database);
     const workspaces = new GitWorkspaceService(root);
-    const repository = store.addRepository(await workspaces.inspectRepository(repositoryPath));
+    const repository = store.addRepository(await workspaces.inspectLocation(repositoryPath));
     const runtime = new FakeAgentRuntime([
       { threadId: "thread_upgrade", message: "需要写入才能继续", outcome: "awaiting_reply", usage: null },
       { threadId: "thread_upgrade", message: "已在隔离工作区继续", outcome: "completed", usage: null }
@@ -209,6 +250,7 @@ describe.sequential("人工 Agent Loop", () => {
     const repository = store.addRepository({
       name: "recovery",
       path: root,
+      kind: "git",
       headCommit: "a".repeat(40),
       branch: "main"
     });
@@ -239,6 +281,8 @@ describe.sequential("人工 Agent Loop", () => {
   it("通过受 CSRF 保护的 API 从 Todo 人工启动只读 Agent", async () => {
     const root = await tempRoot("context-space-agent-api-");
     const repositoryPath = await createGitRepository(root);
+    const plainDirectory = path.join(root, "plain-notes");
+    await mkdir(plainDirectory);
     const runtime = new FakeAgentRuntime([
       { threadId: "thread_api", message: "分析完成", outcome: "completed", usage: null }
     ]);
@@ -261,6 +305,17 @@ describe.sequential("人工 Agent Loop", () => {
       .set("x-context-space-csrf", csrf)
       .send({ path: repositoryPath })
       .expect(201);
+    const directory = await request(context.app)
+      .post("/api/agent/repositories")
+      .set("x-context-space-csrf", csrf)
+      .send({ path: plainDirectory })
+      .expect(201);
+    expect(directory.body).toMatchObject({ kind: "directory", headCommit: null, branch: null });
+    await request(context.app)
+      .post("/api/agent/sessions")
+      .set("x-context-space-csrf", csrf)
+      .send({ sourceKind: "todo", sourceId: "agent_api", repositoryId: directory.body.id, mode: "isolated_worktree", prompt: "修改这个目录" })
+      .expect(400, { error: "普通目录仅支持只读模式，无法创建 Git worktree" });
     const started = await request(context.app)
       .post("/api/agent/sessions")
       .set("x-context-space-csrf", csrf)

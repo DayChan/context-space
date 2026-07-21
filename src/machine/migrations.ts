@@ -398,6 +398,15 @@ export const MACHINE_MIGRATIONS: readonly MachineMigration[] = [
       CREATE INDEX agent_confirmations_pending_idx
         ON agent_confirmations(session_id, status, created_at);
     `
+  },
+  {
+    version: 5,
+    name: "agent-plain-directories",
+    sql: `
+      ALTER TABLE agent_repositories
+        ADD COLUMN kind TEXT NOT NULL DEFAULT 'git'
+        CHECK(kind IN ('git', 'directory'));
+    `
   }
 ];
 

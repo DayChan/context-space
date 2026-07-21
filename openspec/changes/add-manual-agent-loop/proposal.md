@@ -5,8 +5,8 @@ Context Space 当前只能整理 Todo 与 Meego 上下文，Loop 仍是不可执
 ## What Changes
 
 - 在符合条件的 Todo 和未完成 Meego 条目上增加“开始 Agent 干活”入口，并要求用户在启动前确认任务说明、仓库与工作模式。
-- 增加仓库注册与校验能力，只允许从已配置仓库启动会话。
-- 提供“只读分析”和“隔离开发”两种互斥模式：只读模式在原仓库使用只读沙箱，隔离开发模式从固定基线创建会话专属 Git worktree 和分支。
+- 增加工作目录注册与校验能力，支持 Git 仓库和普通目录，并允许以 `~/` 表示当前用户主目录；只允许从已配置目录启动会话。
+- 提供“只读分析”和“隔离开发”两种互斥模式：Git 仓库支持两种模式，普通目录仅支持只读沙箱；隔离开发模式从固定基线创建会话专属 Git worktree 和分支。
 - 增加持久 Agent Session、Turn、Event、Message 与 Confirmation Request，将 Codex Thread 和运行投影保存在 SQLite，并通过流式事件更新 Loop。
 - 将 Loop 从只读 readiness 占位升级为人工 Agent 工作台，展示正在执行、需要人工确认、等待回复和最近结束的会话，并支持继续对话、停止、恢复与人工验收。
 - Agent 的完成结论不会自动完成 Todo、修改 Meego、提交、合并、push 或创建 MR；所有外部状态仍由用户显式处理。

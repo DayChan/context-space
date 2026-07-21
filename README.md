@@ -15,7 +15,7 @@ Context Space 是一个单用户、本机运行的工作上下文系统。它通
 - Provider 失败不影响已经提交的来源和同步游标；分析任务在本地持久队列中有界重试，不会静默切换 Provider。
 - `workspace/` 默认不进入 Git，因为其中可能包含私人工作内容。
 - Loop 只支持从 Todo 或 Meego 人工启动；没有自动调度，也不会自动完成上游工作项、提交、推送、合并或创建 MR。
-- 只读 Agent 强制使用原仓库的只读沙箱；可写 Agent 仅能使用 Context Space 管理的独立 worktree，且禁用网络与交互式审批。
+- 只读 Agent 强制在所选 Git 仓库或普通目录使用只读沙箱；可写 Agent 仅能使用 Context Space 管理的独立 Git worktree，且禁用网络与交互式审批。
 
 ## 环境要求
 
@@ -102,10 +102,12 @@ Settings 和 Meego 页面均可触发独立的手动只读同步。直接调用 
 
 ## 人工 Agent Loop
 
-Loop 当前是人工触发的本地 Agent 工作台，不是自动任务调度器。先在 Settings 的 “Agent repositories” 中注册一个本地 Git 仓库；系统会解析真实仓库根目录、当前分支和 HEAD，非 Git 路径不会保存。随后可以从未完成且可执行的 Todo 或 Meego 条目点击 `Agent`，编辑任务说明并选择仓库和工作模式：
+Loop 当前是人工触发的本地 Agent 工作台，不是自动任务调度器。先在 Settings 的 “Agent workspaces” 中注册一个本地 Git 仓库或普通目录；绝对路径和以 `~/` 开头的当前用户主目录相对路径均可使用，系统会保存规范真实路径。随后可以从未完成且可执行的 Todo 或 Meego 条目点击 `Agent`，编辑任务说明并选择工作目录和模式：
 
-- **只读分析**：直接以仓库根目录运行，强制 `read-only` 沙箱，不创建分支或 worktree，适合调研、解释和代码审查。
+- **只读分析**：直接以 Git 仓库根目录或普通目录运行，强制 `read-only` 沙箱，不创建分支或 worktree，适合调研、解释和代码审查。
 - **隔离开发**：固定启动瞬间的 HEAD 作为 `base_commit`，创建 `context-space/<session-id>` 分支和会话专属 worktree；Agent 的写权限只覆盖该 worktree。
+
+普通目录没有 Git HEAD，因此只能选择只读分析；服务端也会拒绝绕过 UI 提交的隔离开发请求。
 
 原仓库不存在“可写”模式。只读会话需要修改代码时，Loop 会先创建结构化人工确认；批准后才从该会话原始基线创建 worktree，并在同一个 Codex Thread 中继续。每个会话的消息、Turn、事件、确认、Thread ID 和工作区信息都保存在 SQLite，页面通过 SSE 刷新；服务重启时，正在运行的 Turn 会标记为中断，历史对话仍可查看并由用户发送新消息继续。
 

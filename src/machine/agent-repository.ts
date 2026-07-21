@@ -16,6 +16,7 @@ import { decodeJson, encodeJson } from "./json";
 
 interface RepositoryRow {
   id: string; name: string; path: string; head_commit: string; branch: string | null;
+  kind: AgentRepository["kind"];
   created_at: string; updated_at: string;
 }
 interface SessionRow {
@@ -51,15 +52,20 @@ function nowIso(): string { return new Date().toISOString(); }
 export class AgentRepositoryStore {
   constructor(private readonly database: MachineDatabase) {}
 
-  addRepository(input: { name: string; path: string; headCommit: string; branch: string | null }): AgentRepository {
+  addRepository(input: { name: string; path: string; kind: AgentRepository["kind"]; headCommit: string | null; branch: string | null }): AgentRepository {
     const timestamp = nowIso();
     const existing = this.database.connection.prepare("SELECT * FROM agent_repositories WHERE path = ?").get(input.path) as RepositoryRow | undefined;
-    if (existing) return this.hydrateRepository(existing);
+    if (existing) {
+      this.database.connection.prepare(
+        "UPDATE agent_repositories SET name = ?, kind = ?, head_commit = ?, branch = ?, updated_at = ? WHERE id = ?"
+      ).run(input.name, input.kind, input.headCommit ?? "", input.branch, timestamp, existing.id);
+      return this.getRepository(existing.id)!;
+    }
     const id = `repo_${randomUUID()}`;
     this.database.connection.prepare(
-      `INSERT INTO agent_repositories(id, name, path, head_commit, branch, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, input.name, input.path, input.headCommit, input.branch, timestamp, timestamp);
+      `INSERT INTO agent_repositories(id, name, path, head_commit, branch, created_at, updated_at, kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, input.name, input.path, input.headCommit ?? "", input.branch, timestamp, timestamp, input.kind);
     return this.getRepository(id)!;
   }
 
@@ -73,11 +79,15 @@ export class AgentRepositoryStore {
     return row ? this.hydrateRepository(row) : null;
   }
 
-  updateRepositorySnapshot(id: string, input: { headCommit: string; branch: string | null }): AgentRepository {
+  updateRepositorySnapshot(id: string, input: {
+    kind: AgentRepository["kind"];
+    headCommit: string | null;
+    branch: string | null;
+  }): AgentRepository {
     const changed = this.database.connection.prepare(
-      "UPDATE agent_repositories SET head_commit = ?, branch = ?, updated_at = ? WHERE id = ?"
-    ).run(input.headCommit, input.branch, nowIso(), id);
-    if (!changed.changes) throw new AgentRequestError("Agent 仓库不存在");
+      "UPDATE agent_repositories SET kind = ?, head_commit = ?, branch = ?, updated_at = ? WHERE id = ?"
+    ).run(input.kind, input.headCommit ?? "", input.branch, nowIso(), id);
+    if (!changed.changes) throw new AgentRequestError("Agent 工作目录不存在");
     return this.getRepository(id)!;
   }
 
@@ -85,14 +95,14 @@ export class AgentRepositoryStore {
     const active = this.database.connection.prepare(
       "SELECT 1 FROM agent_sessions WHERE repository_id = ? AND status = 'active' LIMIT 1"
     ).get(id);
-    if (active) throw new AgentConflictError("仓库仍被活跃 Agent 会话使用");
+    if (active) throw new AgentConflictError("工作目录仍被活跃 Agent 会话使用");
     return this.database.connection.prepare("DELETE FROM agent_repositories WHERE id = ?").run(id).changes === 1;
   }
 
   createSession(input: {
     title: string; sourceKind: "todo" | "meego"; sourceId: string;
     repositoryId: string; mode: AgentWorkspaceMode; workspacePath: string;
-    branch: string | null; baseCommit: string; prompt: string; id?: string;
+    branch: string | null; baseCommit: string | null; prompt: string; id?: string;
   }): AgentSession {
     const id = input.id ?? `session_${randomUUID()}`;
     const messageId = `message_${randomUUID()}`;
@@ -105,7 +115,7 @@ export class AgentRepositoryStore {
           branch, base_commit, status, attention, workspace_lifecycle, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'none', 'ready', ?, ?)`
       ).run(id, input.title, input.sourceKind, input.sourceId, input.repositoryId, input.mode,
-        input.workspacePath, input.branch, input.baseCommit, timestamp, timestamp);
+        input.workspacePath, input.branch, input.baseCommit ?? "", timestamp, timestamp);
       this.insertMessage({ id: messageId, sessionId: id, turnId, role: "user", content: input.prompt, createdAt: timestamp });
       this.database.connection.prepare(
         `INSERT INTO agent_turns(id, session_id, input_message_id, status, created_at)
@@ -350,8 +360,8 @@ export class AgentRepositoryStore {
   private listTurns(id: string): AgentTurn[] { return (this.database.connection.prepare("SELECT * FROM agent_turns WHERE session_id = ? ORDER BY created_at, id").all(id) as TurnRow[]).map((r) => this.hydrateTurn(r)); }
   private listEvents(id: string): AgentEvent[] { return (this.database.connection.prepare("SELECT * FROM agent_events WHERE session_id = ? ORDER BY sequence DESC LIMIT 200").all(id) as EventRow[]).reverse().map((r) => this.hydrateEvent(r)); }
   private listConfirmations(id: string): AgentConfirmation[] { return (this.database.connection.prepare("SELECT * FROM agent_confirmations WHERE session_id = ? ORDER BY created_at").all(id) as ConfirmationRow[]).map((r) => this.hydrateConfirmation(r)); }
-  private hydrateRepository(r: RepositoryRow): AgentRepository { return { id: r.id, name: r.name, path: r.path, headCommit: r.head_commit, branch: r.branch, createdAt: r.created_at, updatedAt: r.updated_at }; }
-  private hydrateSession(r: SessionRow): AgentSession { return { id: r.id, title: r.title, sourceKind: r.source_kind, sourceId: r.source_id, repositoryId: r.repository_id, mode: r.mode, workspacePath: r.workspace_path, branch: r.branch, baseCommit: r.base_commit, threadId: r.thread_id, status: r.status, attention: r.attention, workspaceLifecycle: r.workspace_lifecycle, createdAt: r.created_at, updatedAt: r.updated_at, endedAt: r.ended_at }; }
+  private hydrateRepository(r: RepositoryRow): AgentRepository { return { id: r.id, name: r.name, path: r.path, kind: r.kind, headCommit: r.head_commit || null, branch: r.branch, createdAt: r.created_at, updatedAt: r.updated_at }; }
+  private hydrateSession(r: SessionRow): AgentSession { return { id: r.id, title: r.title, sourceKind: r.source_kind, sourceId: r.source_id, repositoryId: r.repository_id, mode: r.mode, workspacePath: r.workspace_path, branch: r.branch, baseCommit: r.base_commit || null, threadId: r.thread_id, status: r.status, attention: r.attention, workspaceLifecycle: r.workspace_lifecycle, createdAt: r.created_at, updatedAt: r.updated_at, endedAt: r.ended_at }; }
   private hydrateMessage(r: MessageRow): AgentMessage { return { id: r.id, sessionId: r.session_id, turnId: r.turn_id, role: r.role, content: r.content, createdAt: r.created_at }; }
   private hydrateTurn(r: TurnRow): AgentTurn { return { id: r.id, sessionId: r.session_id, inputMessageId: r.input_message_id, status: r.status, outcome: r.outcome, usage: r.usage_json ? decodeJson<Record<string, number>>(r.usage_json) : null, error: r.error, createdAt: r.created_at, startedAt: r.started_at, completedAt: r.completed_at }; }
   private hydrateEvent(r: EventRow): AgentEvent { return { id: r.id, sequence: r.sequence, sessionId: r.session_id, turnId: r.turn_id, type: r.type, data: decodeJson<Record<string, unknown>>(r.data_json), createdAt: r.created_at }; }

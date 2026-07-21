@@ -13,11 +13,11 @@ export class AgentLoopService {
   ) {}
 
   async registerRepository(inputPath: string) {
-    return this.store.addRepository(await this.workspaces.inspectRepository(inputPath));
+    return this.store.addRepository(await this.workspaces.inspectLocation(inputPath));
   }
   repositories() { return this.store.listRepositories(); }
   removeRepository(id: string) {
-    if (!this.store.removeRepository(id)) throw new AgentRequestError("仓库记录不存在");
+    if (!this.store.removeRepository(id)) throw new AgentRequestError("工作目录记录不存在");
   }
 
   async start(input: {
@@ -25,9 +25,12 @@ export class AgentLoopService {
     repositoryId: string; mode: AgentWorkspaceMode; prompt: string;
   }): Promise<AgentSession> {
     const registered = this.store.getRepository(input.repositoryId);
-    if (!registered) throw new AgentRequestError("Agent 仓库不存在");
-    const current = await this.workspaces.inspectRepository(registered.path);
+    if (!registered) throw new AgentRequestError("Agent 工作目录不存在");
+    const current = await this.workspaces.inspectLocation(registered.path);
     const repository = this.store.updateRepositorySnapshot(registered.id, current);
+    if (input.mode === "isolated_worktree" && repository.kind !== "git") {
+      throw new AgentRequestError("普通目录仅支持只读模式，无法创建 Git worktree");
+    }
     const sessionId = `session_${randomUUID()}`;
     const workspace = input.mode === "isolated_worktree"
       ? await this.workspaces.createWorktree(repository, sessionId, repository.headCommit)
@@ -77,6 +80,9 @@ export class AgentLoopService {
     if (!session) throw new AgentRequestError("Agent 会话不存在");
     if (session.status !== "active") throw new AgentConflictError("Agent 会话已结束");
     if (session.mode !== "read_only") return this.store.getSession(id, true)!;
+    const repository = this.store.getRepository(session.repositoryId);
+    if (!repository) throw new AgentRequestError("Agent 工作目录不存在");
+    if (repository.kind !== "git") throw new AgentRequestError("普通目录仅支持只读模式，无法升级到 Git worktree");
     this.store.createConfirmation({
       sessionId: id,
       kind: "workspace_upgrade",
@@ -104,6 +110,7 @@ export class AgentLoopService {
     const session = this.store.getSession(id);
     if (!session) throw new AgentRequestError("Agent 会话不存在");
     if (session.mode !== "isolated_worktree" || !session.branch || session.workspaceLifecycle === "removed") return { removed: false };
+    if (!session.baseCommit) throw new AgentConflictError("隔离开发会话缺少 Git 基线");
     const repository = this.store.getRepository(session.repositoryId);
     if (!repository) throw new AgentRequestError("Agent 仓库不存在");
     const state = await this.workspaces.status(repository, session.workspacePath, session.baseCommit);
@@ -123,6 +130,7 @@ export class AgentLoopService {
   private async performCleanup(id: string): Promise<void> {
     const session = this.store.getSession(id);
     if (!session || session.mode !== "isolated_worktree" || !session.branch || session.workspaceLifecycle === "removed") return;
+    if (!session.baseCommit) throw new AgentConflictError("隔离开发会话缺少 Git 基线");
     const repository = this.store.getRepository(session.repositoryId);
     if (!repository) throw new AgentRequestError("Agent 仓库不存在");
     await this.workspaces.removeWorktree(repository, session.workspacePath, session.branch, session.baseCommit, true);
