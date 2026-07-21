@@ -1,0 +1,73 @@
+README.md
+  s_aa2817e42ba2bf::t_25266147342448 17-18,102-114
+openspec/changes/add-manual-agent-loop/design.md
+  s_aa2817e42ba2bf::t_05f891357ae25a 1-95
+openspec/changes/add-manual-agent-loop/proposal.md
+  s_aa2817e42ba2bf::t_b99fd485881643 1-31
+openspec/changes/add-manual-agent-loop/specs/agent-human-confirmation/spec.md
+  s_aa2817e42ba2bf::t_53feb688729837 1-33
+openspec/changes/add-manual-agent-loop/specs/agent-session-runtime/spec.md
+  s_aa2817e42ba2bf::t_4bca449915a31d 1-48
+openspec/changes/add-manual-agent-loop/specs/agent-workspace-management/spec.md
+  s_aa2817e42ba2bf::t_6e8c5f2c7d8e0c 1-48
+openspec/changes/add-manual-agent-loop/specs/automation-loop-readiness/spec.md
+  s_aa2817e42ba2bf::t_84ba3db7e7891d 1-26
+openspec/changes/add-manual-agent-loop/specs/context-workbench-ui/spec.md
+  s_aa2817e42ba2bf::t_51dd907fa9ea15 1-33
+src/agent/codex-runtime.ts
+  s_aa2817e42ba2bf::t_52a4efa1b99540 1-89
+src/agent/contracts.ts
+  s_aa2817e42ba2bf::t_36e5374fc676db 1-76
+src/agent/coordinator.ts
+  s_aa2817e42ba2bf::t_22d4247ff2dad2 1-93
+src/agent/git-workspace.ts
+  s_aa2817e42ba2bf::t_7f065bc331b518 1-80
+src/agent/index.ts
+  s_aa2817e42ba2bf::t_a2065b8ff8fd20 1-5
+src/agent/service.ts
+  s_aa2817e42ba2bf::t_b3d37bccf80ad8 1-132
+src/core/agent-errors.ts
+  s_aa2817e42ba2bf::t_5dce92b138c2a6 1-2
+src/core/types.ts
+  s_aa2817e42ba2bf::t_758c165384a27d 316-419
+src/machine/agent-repository.ts
+  s_aa2817e42ba2bf::t_9baa8a8dd7f84d 1-359
+src/machine/index.ts
+  s_aa2817e42ba2bf::t_efac25a83ff61d 47
+src/machine/migrations.ts
+  s_aa2817e42ba2bf::t_7fed6636ef1b24 305-400
+src/server/app.ts
+  s_aa2817e42ba2bf::t_462a33474426bc 4,7-15,56,81,198-212,222-224,245,307,311-313,659-671,682-684,770-771,957-959,1262-1384,1392-1396
+src/web/App.tsx
+  s_aa2817e42ba2bf::t_5a853c8e483aa3 20,23,27-28,46-48,500-573,637-642,681-688,1161,1164,1168-1173,1175-1241,1244-1283,1430,1472,1545,1555,1829-1853,1857,1860-1871
+src/web/api.ts
+  s_aa2817e42ba2bf::t_369cd3e0501829 35
+src/web/styles.css
+  s_aa2817e42ba2bf::t_1a15a76eb2d9ce 29,174-196,287-326,329-333,484-485,501-503,521
+tests/agent-loop.test.ts
+  s_aa2817e42ba2bf::t_a320076746f7dc 1-296
+tests/api.test.ts
+  s_aa2817e42ba2bf::t_a6c334063d54d2 137,139-140,738-742
+tests/frontend.test.tsx
+  s_aa2817e42ba2bf::t_c9b6e1854c7a11 8-9,246-247,267,340-341,431-491,636-640,1011-1012,1015,1017-1019,1023-1056
+tests/machine-database.test.ts
+  s_aa2817e42ba2bf::t_2157a6d24fdacb 38-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "07ab27e3720521a6105513f3e8e0af00445e3291",
+  "prompts": {},
+  "sessions": {
+    "s_aa2817e42ba2bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f83e0-7301-7ee0-9363-b643ac673cf7",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
