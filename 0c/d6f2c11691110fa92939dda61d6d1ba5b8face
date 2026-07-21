@@ -1,0 +1,55 @@
+README.md
+  s_1e14a7b6a357c0::t_ba224a94fcaa9a 112-115
+openspec/changes/add-openspec-agent-workflow/.openspec.yaml
+  s_1e14a7b6a357c0::t_18e55da6fd4fe3 1-2
+openspec/changes/add-openspec-agent-workflow/design.md
+  s_1e14a7b6a357c0::t_fd5cefe0bba273 1-82
+openspec/changes/add-openspec-agent-workflow/proposal.md
+  s_1e14a7b6a357c0::t_e9c75c29f82f91 1-29
+openspec/changes/add-openspec-agent-workflow/specs/agent-openspec-workflow/spec.md
+  s_1e14a7b6a357c0::t_92d61819b40c09 1-68
+package-lock.json
+  s_1e14a7b6a357c0::t_b64f512e87dc06 22,9607-9621
+package.json
+  s_1e14a7b6a357c0::t_1feef3dbc3d670 36
+src/agent/index.ts
+  s_1e14a7b6a357c0::t_655358a455d866 5
+src/agent/openspec.ts
+  s_1e14a7b6a357c0::t_898a37f8feec95 1-174
+src/agent/service.ts
+  s_1e14a7b6a357c0::t_896a992f7f8753 3,7-14,20-21,35,44-50,55-113
+src/core/types.ts
+  s_1e14a7b6a357c0::t_604bd53a512d22 317,406,423-454
+src/machine/agent-repository.ts
+  s_1e14a7b6a357c0::t_b91190ba32a6d5 12,26,107-108,118-119,121,367
+src/machine/migrations.ts
+  s_1e14a7b6a357c0::t_3a269db656496c 408-417
+src/server/app.ts
+  s_1e14a7b6a357c0::t_562da388c23221 15,17,209-212,224-227,263,685,689-690,1335-1340,1355-1378
+src/web/App.tsx
+  s_1e14a7b6a357c0::t_72b65964c4e901 32,54-56,524-527,534-540,542-562,568-577,588-596,608-612,621-622,624-627,629,1314-1404,1499-1504,1526,1547
+src/web/styles.css
+  s_1e14a7b6a357c0::t_41500d67b5d37d 195-205,308-334
+tests/agent-loop.test.ts
+  s_1e14a7b6a357c0::t_10a46296e7d216 13,17,82-109,121-228,425-439,441-443,456,473-475,515-533
+tests/frontend.test.tsx
+  s_1e14a7b6a357c0::t_14abbfbc8d8e6e 12-14,251-253,348-350,459-461,473,485,496,504-516,1075-1101,1140,1181,1235-1295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0cd6f2c11691110fa92939dda61d6d1ba5b8face",
+  "prompts": {},
+  "sessions": {
+    "s_1e14a7b6a357c0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f84be-aea3-7d32-85ea-787b9b91ee1d",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
