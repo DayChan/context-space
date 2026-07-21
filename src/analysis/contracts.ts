@@ -3,6 +3,15 @@ import type { BaseMetadata } from "../core/types";
 export const BUILT_IN_ANALYSIS_PROVIDERS = ["codex-sdk", "codex-exec"] as const;
 export type BuiltInAnalysisProviderId = (typeof BUILT_IN_ANALYSIS_PROVIDERS)[number];
 
+export const CODEX_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh"
+] as const;
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+
 export type AnalysisRunStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type AnalysisErrorCode =
@@ -36,6 +45,7 @@ export interface ProviderAnalysisRequest {
   outputSchema: unknown;
   workingDirectory: string;
   model: string | null;
+  reasoningEffort: CodexReasoningEffort;
   timeoutMs: number;
   maxOutputBytes: number;
 }
@@ -60,6 +70,7 @@ export interface AnalysisProvider {
 export interface AnalysisConfig {
   provider: string;
   model: string | null;
+  reasoning_effort: CodexReasoningEffort;
   timeout_ms: number;
   max_source_chars: number;
   max_batch_records: number;

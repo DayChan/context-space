@@ -73,6 +73,7 @@ curl -X POST http://127.0.0.1:4318/api/sync/lark \
 ```yaml
 provider: codex-sdk
 model: null
+reasoning_effort: medium
 timeout_ms: 120000
 max_source_chars: 20000
 max_batch_records: 50
@@ -90,16 +91,16 @@ max_reanalysis_records: 50
 - `codex-sdk`：默认方式，服务端通过 `@openai/codex-sdk` 创建新线程，并为每次分析传入统一 JSON Schema。SDK 遵循 Codex 的标准本地会话行为，可能在 Codex 主目录下保留会话元数据。
 - `codex-exec`：调用本机 `codex exec`，使用 `--ephemeral`、`--sandbox read-only`、`--json`、`--output-schema` 和 `--output-last-message`，不保留会话文件。
 
-可在 Settings 中显式切换 Provider 和模型，也可以调用本地 API：
+可在 Settings 中显式切换 Provider 和模型；选择 `codex-sdk` 时还可以设置推理强度。也可以调用本地 API：
 
 ```bash
 curl -X PUT http://127.0.0.1:4318/api/config/analysis \
   -H 'Content-Type: application/json' \
   -H "x-context-space-csrf: ${CSRF_TOKEN}" \
-  -d '{"provider":"codex-exec","model":"替换为当前账户可用的模型ID"}'
+  -d '{"provider":"codex-sdk","model":"gpt-5.6-sol","reasoning_effort":"medium"}'
 ```
 
-Codex SDK 支持选择模型：非空 `model` 会传给 `startThread({ model })`，Exec 方式会传给 `codex exec --model`。将 `model` 清空或保存为 `null` 时，Codex 使用当前推荐默认模型。系统不硬编码模型列表，也不会在模型不可用时静默切换；可用性由当前 Codex 认证和服务端决定。
+Codex SDK 支持选择模型和推理强度：非空 `model` 与 `reasoning_effort` 会分别传给 `startThread({ model, modelReasoningEffort })`。推理强度支持 `minimal`、`low`、`medium`、`high`、`xhigh`，默认 `medium`。Exec 方式仅将模型传给 `codex exec --model`。将 `model` 清空或保存为 `null` 时，Codex 使用当前推荐默认模型。系统不硬编码模型列表，也不会在模型不可用时静默切换；可用性由当前 Codex 认证和服务端决定。
 
 部署时可以使用 `CONTEXT_SPACE_ANALYSIS_PROVIDER=codex-sdk` 或 `codex-exec` 覆盖 SQLite 配置。覆盖生效时 Settings 的 Provider 选择会被锁定。认证信息只应保存在 Codex 自身认证存储或进程环境中。
 

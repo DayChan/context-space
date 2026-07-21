@@ -646,13 +646,28 @@ describe("local API", () => {
 
   it("switches providers without making an analysis call", async () => {
     await authorized(request(context.app).put("/api/config/analysis"))
-      .send({ provider: "codex-exec", model: "test-model" })
+      .send({
+        provider: "codex-exec",
+        model: "test-model",
+        reasoning_effort: "high"
+      })
       .expect(200);
     const config = await request(context.app).get("/api/config").expect(200);
     expect(config.body.analysis.current_provider).toBe("codex-exec");
     expect(config.body.analysis.config.model).toBe("test-model");
+    expect(config.body.analysis.config.reasoning_effort).toBe("high");
     expect(sdkProvider.calls).toBe(0);
     expect(execProvider.calls).toBe(0);
+    await authorized(request(context.app).put("/api/config/analysis"))
+      .send({ model: "second-model" })
+      .expect(200);
+    const modelOnlyUpdate = await request(context.app)
+      .get("/api/config")
+      .expect(200);
+    expect(modelOnlyUpdate.body.analysis.config.reasoning_effort).toBe("high");
+    await authorized(request(context.app).put("/api/config/analysis"))
+      .send({ reasoning_effort: "extreme" })
+      .expect(400);
     await authorized(request(context.app).put("/api/config/analysis"))
       .send({ provider: "unknown-provider" })
       .expect(400);

@@ -12,6 +12,7 @@ import type {
   TodoMetadata
 } from "../src/core/types";
 import { DEFAULT_AUTOMATION, EMPTY_SYNC_STATUS } from "../src/core/types";
+import type { AnalysisConfig } from "../src/analysis/contracts";
 import type { StoredCandidate } from "../src/machine";
 import { AppView } from "../src/web/App";
 
@@ -188,6 +189,7 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 
 let selectedProvider = "codex-sdk";
 let selectedModel: string | null = null;
+let selectedReasoningEffort: AnalysisConfig["reasoning_effort"] = "medium";
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
 let owedTodoStatus: TodoMetadata["status"] = "open";
 let configuredLeaders: LeaderConfig[] = [];
@@ -206,6 +208,7 @@ function configResponse() {
       config: {
         provider: selectedProvider,
         model: selectedModel,
+        reasoning_effort: selectedReasoningEffort,
         timeout_ms: 120000,
         max_source_chars: 20000,
         max_batch_records: 50,
@@ -254,6 +257,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   selectedProvider = "codex-sdk";
   selectedModel = null;
+  selectedReasoningEffort = "medium";
   larkStatus = EMPTY_SYNC_STATUS;
   owedTodoStatus = "open";
   configuredLeaders = [];
@@ -299,11 +303,17 @@ beforeEach(() => {
         const body = JSON.parse(String(init?.body ?? "{}")) as {
           provider?: string;
           model?: string | null;
+          reasoning_effort?: AnalysisConfig["reasoning_effort"];
         };
         if (body.provider) selectedProvider = body.provider;
         if ("model" in body) selectedModel = body.model ?? null;
+        if (body.reasoning_effort) selectedReasoningEffort = body.reasoning_effort;
         return jsonResponse({
-          config: { provider: selectedProvider, model: selectedModel }
+          config: {
+            provider: selectedProvider,
+            model: selectedModel,
+            reasoning_effort: selectedReasoningEffort
+          }
         });
       }
       if (url === "/api/config/leaders") {
@@ -634,6 +644,24 @@ describe("Context Space workbench", () => {
       "/api/config/analysis",
       expect.objectContaining({ method: "PUT" })
     );
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Codex SDK 推理强度")).not.toBeInTheDocument()
+    );
+  });
+
+  it("configures reasoning effort only for Codex SDK", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+
+    const effort = await screen.findByLabelText("Codex SDK 推理强度");
+    expect(effort).toHaveValue("medium");
+    await user.selectOptions(effort, "high");
+    await user.click(screen.getByRole("button", { name: "保存推理强度" }));
+
+    expect(
+      await screen.findByText("后续 Codex SDK 分析将使用 high 推理强度。")
+    ).toBeInTheDocument();
+    expect(selectedReasoningEffort).toBe("high");
   });
 
   it("searches, adds, lists, and removes Priority people", async () => {

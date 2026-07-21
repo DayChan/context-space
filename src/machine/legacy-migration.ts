@@ -533,6 +533,7 @@ export class LegacyWorkspaceMigration {
         const keys = [
           "provider",
           "model",
+          "reasoning_effort",
           "timeout_ms",
           "max_source_chars",
           "max_batch_records",

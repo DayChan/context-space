@@ -64,6 +64,7 @@ function providerRequest(root: string): ProviderAnalysisRequest {
     outputSchema: analysisJsonSchema,
     workingDirectory: root,
     model: null,
+    reasoningEffort: "medium",
     timeoutMs: 1_000,
     maxOutputBytes: 1_000_000
   };
@@ -361,6 +362,7 @@ describe("Codex SDK provider contract", () => {
       skipGitRepoCheck: true
     });
     expect(threadOptions.model).toBe("test-model");
+    expect(threadOptions.modelReasoningEffort).toBe("medium");
     expect(clientConfig).toMatchObject({
       web_search: "disabled",
       mcp_servers: {},
@@ -660,6 +662,7 @@ describe("analysis coordinator integration", () => {
     data.prompt_version = "context-analysis@1";
     delete data.max_batch_records;
     delete data.max_batch_source_chars;
+    delete data.reasoning_effort;
     await store.write(legacy.path, data, legacy.body, {
       expectedEtag: legacy.etag
     });
@@ -668,6 +671,7 @@ describe("analysis coordinator integration", () => {
     const migrated = await migratedStore.read("config/analysis.md");
     expect(migrated.data).toMatchObject({
       prompt_version: "context-analysis@2",
+      reasoning_effort: "medium",
       max_batch_records: 50,
       max_batch_source_chars: 60000
     });

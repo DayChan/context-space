@@ -99,6 +99,7 @@ export class CodexSdkProvider implements AnalysisProvider {
       });
       const thread = client.startThread({
         ...(request.model ? { model: request.model } : {}),
+        modelReasoningEffort: request.reasoningEffort,
         workingDirectory: request.workingDirectory,
         skipGitRepoCheck: true,
         sandboxMode: "read-only",

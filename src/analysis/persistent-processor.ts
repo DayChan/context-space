@@ -11,7 +11,7 @@ import {
   type AnalysisJob
 } from "../machine";
 import { nullLogger, withLogContext, type Logger } from "../logging";
-import { analysisConfigSchema } from "./config";
+import { analysisConfigSchema, DEFAULT_ANALYSIS_CONFIG } from "./config";
 import {
   AnalysisProviderError,
   sanitizedErrorMessage,
@@ -59,7 +59,10 @@ function retryable(error: unknown): boolean {
 
 function jobConfig(job: AnalysisJob): PersistentAnalysisJobConfig {
   const envelope = job.config as Partial<PersistentAnalysisJobConfig>;
-  const analysis = analysisConfigSchema.parse(envelope.analysis ?? job.config);
+  const analysis = analysisConfigSchema.parse({
+    ...DEFAULT_ANALYSIS_CONFIG,
+    ...(envelope.analysis ?? job.config)
+  });
   if (analysis.prompt_version !== ANALYSIS_PROMPT_VERSION) {
     throw new AnalysisProviderError(
       "unsupported_prompt",
@@ -230,6 +233,7 @@ export class PersistentAnalysisProcessor {
             outputSchema: analysisJsonSchema,
             workingDirectory: temporaryDirectory,
             model: config.analysis.model,
+            reasoningEffort: config.analysis.reasoning_effort,
             timeoutMs: config.analysis.timeout_ms,
             maxOutputBytes: config.analysis.max_output_bytes
           },

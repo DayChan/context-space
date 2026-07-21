@@ -1,12 +1,17 @@
 import { z } from "zod";
 import { MarkdownStore } from "../core/markdown-store";
 import { SettingsRepository } from "../machine";
-import type { AnalysisConfig, EffectiveAnalysisConfig } from "./contracts";
+import {
+  CODEX_REASONING_EFFORTS,
+  type AnalysisConfig,
+  type EffectiveAnalysisConfig
+} from "./contracts";
 import { ANALYSIS_PROMPT_VERSION } from "./prompt";
 
 export const DEFAULT_ANALYSIS_CONFIG: AnalysisConfig = {
   provider: "codex-sdk",
   model: null,
+  reasoning_effort: "medium",
   timeout_ms: 120_000,
   max_source_chars: 20_000,
   max_batch_records: 50,
@@ -21,6 +26,7 @@ export const analysisConfigObjectSchema = z
   .object({
     provider: z.string().trim().min(1).max(80),
     model: z.string().trim().min(1).max(200).nullable(),
+    reasoning_effort: z.enum(CODEX_REASONING_EFFORTS),
     timeout_ms: z.number().int().min(1_000).max(600_000),
     max_source_chars: z.number().int().min(500).max(100_000),
     max_batch_records: z.number().int().min(1).max(500),
@@ -111,7 +117,12 @@ export async function importLegacyAnalysisConfig(
   settings: SettingsRepository
 ): Promise<AnalysisConfig> {
   const existing = settings.get<AnalysisConfig>("analysis_config");
-  if (existing) return analysisConfigSchema.parse(existing);
+  if (existing) {
+    return analysisConfigSchema.parse({
+      ...DEFAULT_ANALYSIS_CONFIG,
+      ...existing
+    });
+  }
   if (!(await store.exists("config/analysis.md"))) {
     settings.set("analysis_config", DEFAULT_ANALYSIS_CONFIG);
     return DEFAULT_ANALYSIS_CONFIG;

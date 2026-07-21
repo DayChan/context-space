@@ -68,6 +68,7 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
     data: baseline("config_analysis", "config", "LLM 内容分析", "manual", {
       provider: "codex-sdk",
       model: null,
+      reasoning_effort: "medium",
       timeout_ms: 120000,
       max_source_chars: 20000,
       max_batch_records: 50,
@@ -179,6 +180,9 @@ export async function initializeWorkspace(root: string): Promise<MarkdownStore> 
       : 20000;
   const migratedAnalysis = {
     ...analysisConfig.data,
+    ...(analysisConfig.data.reasoning_effort === undefined
+      ? { reasoning_effort: "medium" }
+      : {}),
     ...(analysisConfig.data.max_batch_records === undefined
       ? { max_batch_records: 50 }
       : {}),
@@ -195,6 +199,8 @@ export async function initializeWorkspace(root: string): Promise<MarkdownStore> 
       : {})
   };
   if (
+    migratedAnalysis.reasoning_effort !==
+      analysisConfig.data.reasoning_effort ||
     migratedAnalysis.max_batch_records !==
       analysisConfig.data.max_batch_records ||
     migratedAnalysis.max_batch_source_chars !==

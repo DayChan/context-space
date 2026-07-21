@@ -57,6 +57,7 @@ import type {
   AnalysisStatusMetadata,
   ProviderAvailability
 } from "../analysis/contracts";
+import { CODEX_REASONING_EFFORTS } from "../analysis/contracts";
 import type {
   AcceptanceOperation,
   AnalysisJob,
@@ -1094,6 +1095,7 @@ function SettingsPage() {
       config: {
         provider: "codex-sdk",
         model: null,
+        reasoning_effort: "medium",
         timeout_ms: 120000,
         max_source_chars: 20000,
         max_batch_records: 50,
@@ -1149,6 +1151,7 @@ function SettingsPage() {
   const [syncing, setSyncing] = useState(false);
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
+  const [savingReasoningEffort, setSavingReasoningEffort] = useState(false);
   const [savingRetention, setSavingRetention] = useState(false);
   const [retryingJob, setRetryingJob] = useState<string | null>(null);
   const [leaderQuery, setLeaderQuery] = useState("");
@@ -1269,6 +1272,25 @@ function SettingsPage() {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setSavingModel(false);
+    }
+  }
+
+  async function saveReasoningEffort(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingReasoningEffort(true);
+    setMessage("");
+    const rawEffort = new FormData(event.currentTarget).get("reasoning_effort");
+    try {
+      await api("/api/config/analysis", {
+        method: "PUT",
+        body: JSON.stringify({ reasoning_effort: rawEffort })
+      });
+      setMessage(`后续 Codex SDK 分析将使用 ${rawEffort} 推理强度。`);
+      await config.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingReasoningEffort(false);
     }
   }
 
@@ -1408,6 +1430,30 @@ function SettingsPage() {
               {savingModel ? "保存中…" : "保存模型"}
             </button>
           </form>
+          {config.data.analysis.current_provider === "codex-sdk" && (
+            <form className="model-control" onSubmit={saveReasoningEffort}>
+              <label className="provider-control">
+                <span>推理强度</span>
+                <select
+                  key={config.data.analysis.config.reasoning_effort}
+                  aria-label="Codex SDK 推理强度"
+                  name="reasoning_effort"
+                  defaultValue={config.data.analysis.config.reasoning_effort}
+                >
+                  {CODEX_REASONING_EFFORTS.map((effort) => (
+                    <option key={effort} value={effort}>{effort}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="secondary-button"
+                disabled={savingReasoningEffort}
+                type="submit"
+              >
+                {savingReasoningEffort ? "保存中…" : "保存推理强度"}
+              </button>
+            </form>
+          )}
           <div className="provider-list">
             {config.data.analysis.providers.map((provider) => (
               <div key={provider.id}>
@@ -1444,6 +1490,9 @@ function SettingsPage() {
           ))}
           <div className="sync-summary analysis-summary">
             <div><span>当前模型</span><strong>{config.data.analysis.config.model ?? "Codex 默认"}</strong></div>
+            {config.data.analysis.current_provider === "codex-sdk" && (
+              <div><span>推理强度</span><strong>{config.data.analysis.config.reasoning_effort}</strong></div>
+            )}
             <div><span>每批记录</span><strong>{config.data.analysis.config.max_batch_records}</strong></div>
             <div><span>每批来源字符</span><strong>{config.data.analysis.config.max_batch_source_chars}</strong></div>
           </div>

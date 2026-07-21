@@ -361,6 +361,7 @@ export class AnalysisCoordinator {
     const configHash = hashStableValue({
       provider: config.provider,
       model: config.model,
+      reasoning_effort: config.reasoning_effort,
       timeout_ms: config.timeout_ms,
       max_source_chars: config.max_source_chars,
       max_batch_records: config.max_batch_records,
@@ -455,6 +456,7 @@ export class AnalysisCoordinator {
               outputSchema: analysisJsonSchema,
               workingDirectory: temporaryDirectory,
               model: config.model,
+              reasoningEffort: config.reasoning_effort,
               timeoutMs: config.timeout_ms,
               maxOutputBytes: config.max_output_bytes
             },
