@@ -1,0 +1,30 @@
+src/machine/context-repository.ts
+  s_62af5b86b6a8cc::t_93ba757a6aff2c 393-404
+src/web/App.tsx
+  s_62af5b86b6a8cc::t_2106ab3420706f 82-85,584-588
+tests/frontend.test.tsx
+  s_62af5b86b6a8cc::t_bf21d19755e3f1 135,150,164,491,532,576,711,738,742,757,760,764-765
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4eb45afcf6a4050ecf0dc58115dcf4719cc143a2",
+  "prompts": {},
+  "humans": {
+    "h_969d39e0df1452": {
+      "author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_62af5b86b6a8cc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f803c-e122-7fa3-aeca-d3e318a65e17",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
