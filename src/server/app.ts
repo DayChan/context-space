@@ -16,7 +16,10 @@ import {
 import {
   CandidateReviewService
 } from "../analysis/candidate-review";
-import { AnalysisWorker } from "../analysis/worker";
+import {
+  AnalysisWorkerConfigService,
+  AnalysisWorkerPool
+} from "../analysis/worker";
 import { CodexExecProvider } from "../analysis/providers/codex-exec";
 import { CodexSdkProvider } from "../analysis/providers/codex-sdk";
 import { AnalysisProviderRegistry } from "../analysis/providers/registry";
@@ -36,7 +39,8 @@ import {
 import { buildOverview, buildTimeline } from "../core/overview";
 import {
   applyLeaderConfiguration,
-  commitmentsForPerson
+  commitmentsForPerson,
+  personIdForIdentity
 } from "../core/people";
 import { calculatePriority } from "../core/todo";
 import type {
@@ -95,6 +99,12 @@ const provenancePaginationSchema = z.object({
   provenance_page_size: z.coerce.number().int().min(1).max(50).default(10)
 });
 
+const UNKNOWN_SENDER_NAMES = new Set([
+  "Unknown",
+  "Lark user",
+  "Direct message partner"
+]);
+
 const timelinePaginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(20)
@@ -125,13 +135,14 @@ export interface Runtime {
   analysisJobs: AnalysisJobRepository;
   analysisResults: AnalysisResultRepository;
   markdownIndexRepository: MarkdownIndexRepository;
-  analysisWorker: AnalysisWorker;
+  analysisWorker: AnalysisWorkerPool;
   candidateReview: CandidateReviewService;
   markdownIndexSync: MarkdownIndexSync;
   query: ContextQueryService;
   legacyMigration: LegacyWorkspaceMigration;
   sourceRetention: SourceRetentionWorker;
   analysisConfig: AnalysisConfigService;
+  analysisWorkerConfig: AnalysisWorkerConfigService;
   analysisProviders: AnalysisProviderRegistry;
   logger: Logger;
   getLeaders(): Promise<LeaderConfig[]>;
@@ -246,7 +257,7 @@ async function apiDocument(
   runtime: Runtime,
   leaders: LeaderConfig[],
   options: {
-    includePersonProvenance?: boolean;
+    includeProvenance?: boolean;
     includeBacklinks?: boolean;
     includePersonInsights?: boolean;
     personTodos?: Array<WorkspaceDocument<TodoMetadata>>;
@@ -260,6 +271,82 @@ async function apiDocument(
         .filter(({ data }) => data.source_refs.includes(document.data.id))
         .map(({ data }) => data)
     : undefined;
+  const page = options.provenancePage ?? 1;
+  const pageSize = options.provenancePageSize ?? 10;
+  const personDocument = isPerson(document) ? document : null;
+  const provenanceSourceIds = personDocument
+    ? [
+        ...new Set([
+          ...personDocument.data.source_refs,
+          ...personDocument.data.observations.flatMap(
+            (observation) => observation.source_refs ?? []
+          )
+        ])
+      ]
+    : document.data.source_refs;
+  const provenanceResult = options.includeProvenance
+    ? runtime.machineContext.provenanceSources({
+        sourceIds: provenanceSourceIds,
+        identities:
+          personDocument?.data.identities.map((identity) => ({
+            provider: identity.provider,
+            externalId: identity.external_id
+          })) ?? [],
+        limit: pageSize,
+        offset: (page - 1) * pageSize
+      })
+    : { sources: [], total: 0 };
+  const totalPages = Math.max(1, Math.ceil(provenanceResult.total / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+  const normalizedProvenanceResult =
+    options.includeProvenance && normalizedPage !== page
+      ? runtime.machineContext.provenanceSources({
+          sourceIds: provenanceSourceIds,
+          identities:
+            personDocument?.data.identities.map((identity) => ({
+              provider: identity.provider,
+              externalId: identity.external_id
+            })) ?? [],
+          limit: pageSize,
+          offset: (normalizedPage - 1) * pageSize
+        })
+      : provenanceResult;
+  const provenance = options.includeProvenance
+    ? {
+        provenanceSources: normalizedProvenanceResult.sources.map((source) => ({
+          sender: (() => {
+            const sender = source.participants.find(
+              ({ role }) => role === "sender"
+            );
+            if (!sender) return null;
+            return {
+              person_id: personIdForIdentity(
+                source.provider,
+                sender.provider_id
+              ),
+              external_id: sender.provider_id,
+              display_name:
+                sender.name && !UNKNOWN_SENDER_NAMES.has(sender.name)
+                  ? sender.name
+                  : sender.provider_id
+            };
+          })(),
+          id: source.id,
+          provider: source.provider,
+          title: source.title,
+          body: source.body,
+          occurred_at: source.occurredAt,
+          source_kind: source.kind,
+          body_purged_at: source.bodyPurgedAt
+        })),
+        provenancePagination: {
+          page: normalizedPage,
+          page_size: pageSize,
+          total: normalizedProvenanceResult.total,
+          total_pages: totalPages
+        }
+      }
+    : {};
   if (isTodo(document)) {
     return {
       ...document,
@@ -267,6 +354,7 @@ async function apiDocument(
         ...document.data,
         priority: calculatePriority(document.data, leaders)
       },
+      ...provenance,
       ...(backlinks ? { backlinks } : {})
     };
   }
@@ -276,20 +364,6 @@ async function apiDocument(
       runtime.query.all({ type: "todo" }).filter(isTodo);
     const relationships = commitmentsForPerson(document.data.id, todos);
     const includePersonInsights = options.includePersonInsights ?? true;
-    const pendingInsights = includePersonInsights
-      ? runtime.candidateReview
-          .list(null)
-          .filter(
-            (candidate) =>
-              candidate.kind === "person_insight" &&
-              (candidate.status === "proposed" || candidate.status === "pending") &&
-              candidate.data.person_id === document.data.id
-          )
-          .map((candidate) => ({
-            ...candidate,
-            acceptance: runtime.analysisResults.getAcceptance(candidate.id)
-          }))
-      : [];
     const acceptedInsights = includePersonInsights
       ? runtime.index
           .all<PersonMetadata>({ type: "person" })
@@ -304,63 +378,22 @@ async function apiDocument(
             observations: data.observations
           }))
       : [];
-    const page = options.provenancePage ?? 1;
-    const pageSize = options.provenancePageSize ?? 10;
-    const resolvedSources = options.includePersonProvenance
-      ? [...new Set([
-          ...document.data.source_refs,
-          ...document.data.observations.flatMap(
-            (observation) => observation.source_refs ?? []
-          )
-        ])]
-          .flatMap((reference) => {
-            const source = runtime.machineContext.getSource(reference);
-            return source ? [source] : [];
-          })
-          .sort((left, right) =>
-            right.occurredAt.localeCompare(left.occurredAt)
-          )
-      : [];
-    const total = resolvedSources.length;
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
-    const normalizedPage = Math.min(page, totalPages);
-    const pageStart = (normalizedPage - 1) * pageSize;
-    const provenanceSources = resolvedSources
-      .slice(pageStart, pageStart + pageSize)
-      .map((source) => ({
-        id: source.id,
-        title: source.title,
-        body: source.body,
-        occurred_at: source.occurredAt,
-        source_kind: source.kind,
-        body_purged_at: source.bodyPurgedAt
-      }));
     return {
       ...document,
       data: applyLeaderConfiguration(document.data, leaders),
-      ...(options.includePersonProvenance
-        ? {
-            provenanceSources,
-            provenancePagination: {
-              page: normalizedPage,
-              page_size: pageSize,
-              total,
-              total_pages: totalPages
-            }
-          }
-        : {}),
+      ...provenance,
       relationships: {
         owedByMe: relationships.owedByMe.map(({ data }) => data),
         waitingOnThem: relationships.waitingOnThem.map(({ data }) => data),
         shared: relationships.shared.map(({ data }) => data)
       },
-      pendingInsights,
       acceptedInsights,
       ...(backlinks ? { backlinks } : {})
     };
   }
   return {
     ...document,
+    ...provenance,
     ...(backlinks ? { backlinks } : {})
   };
 }
@@ -415,6 +448,10 @@ export async function createApp(options: CreateAppOptions): Promise<{
     settings.set("leaders", parsed.success ? parsed.data : []);
   }
   const analysisConfig = new AnalysisConfigService(settings, environment);
+  const analysisWorkerConfig = new AnalysisWorkerConfigService(
+    settings,
+    environment
+  );
   const analysisProviders = new AnalysisProviderRegistry(
     options.analysisProviders ?? [
       new CodexSdkProvider({ environment }),
@@ -438,19 +475,43 @@ export async function createApp(options: CreateAppOptions): Promise<{
     machineContext,
     settings
   );
+  const candidateReview = new CandidateReviewService(
+    analysisResults,
+    store,
+    async (documentPath) => markdownIndexSync.refreshPath(documentPath)
+  );
+  await candidateReview.recover();
+  const initialAutomaticPublication =
+    await candidateReview.publishWithoutReview();
+  if (
+    initialAutomaticPublication.failures.length ||
+    initialAutomaticPublication.operations.some(
+      ({ state }) => state === "conflict"
+    )
+  ) {
+    serverLogger.error("analysis.automatic_publication.initial_incomplete", {
+      failure_count: initialAutomaticPublication.failures.length,
+      conflict_count: initialAutomaticPublication.operations.filter(
+        ({ state }) => state === "conflict"
+      ).length,
+      failures: initialAutomaticPublication.failures
+    });
+  }
   const analysisProcessor = new PersistentAnalysisProcessor(
     machineContext,
     analysisJobs,
     analysisResults,
     analysisProviders,
+    candidateReview,
     logger
   );
-  const analysisWorker = new AnalysisWorker(
+  const analysisWorker = new AnalysisWorkerPool(
     analysisJobs,
     analysisProcessor,
-    logger
+    logger,
+    {},
+    analysisWorkerConfig.getEffective().worker_count
   );
-  const candidateReview = new CandidateReviewService(analysisResults, store);
   const query = new ContextQueryService(index, machineContext, analysisResults);
   const dailySummary = new DailySummaryService(store, markdownIndexSync);
   const humanDocuments = new HumanDocumentService(
@@ -458,7 +519,6 @@ export async function createApp(options: CreateAppOptions): Promise<{
     index,
     markdownIndexSync
   );
-  await candidateReview.recover();
   const runner =
     options.commandRunner ??
     new LarkCliCommandRunner("lark-cli", logger);
@@ -495,6 +555,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
     legacyMigration,
     sourceRetention,
     analysisConfig,
+    analysisWorkerConfig,
     analysisProviders,
     logger,
     async getLeaders() {
@@ -615,7 +676,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
       runtime,
       await runtime.getLeaders(),
       {
-        includePersonProvenance: document.data.type === "person",
+        includeProvenance: true,
         includeBacklinks: true,
         provenancePage: provenancePagination.provenance_page,
         provenancePageSize: provenancePagination.provenance_page_size
@@ -724,6 +785,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
 
   app.get("/api/config", async (_request, response) => {
     const effectiveAnalysis = await analysisConfig.getEffective();
+    const effectiveWorkers = analysisWorkerConfig.getEffective();
     const registeredProviders = await Promise.all(
       analysisProviders.all().map(async (provider) => ({
         id: provider.id,
@@ -758,6 +820,9 @@ export async function createApp(options: CreateAppOptions): Promise<{
         current_provider: effectiveAnalysis.config.provider,
         config_source: effectiveAnalysis.source,
         provider_locked: effectiveAnalysis.provider_locked,
+        worker_count: effectiveWorkers.worker_count,
+        worker_count_source: effectiveWorkers.source,
+        worker_count_locked: effectiveWorkers.locked,
         config: effectiveAnalysis.config,
         providers,
         prompt_version: ANALYSIS_PROMPT_VERSION,
@@ -795,6 +860,25 @@ export async function createApp(options: CreateAppOptions): Promise<{
       return;
     }
     const effective = await analysisConfig.update(request.body);
+    response.json(effective);
+  });
+
+  app.put("/api/config/analysis/workers", (request, response) => {
+    const current = analysisWorkerConfig.getEffective();
+    const requested =
+      request.body && typeof request.body === "object"
+        ? (request.body as Record<string, unknown>).worker_count
+        : undefined;
+    if (
+      current.locked &&
+      requested !== undefined &&
+      requested !== current.worker_count
+    ) {
+      response.status(409).json({ error: "LLM Worker 数量已被环境变量锁定" });
+      return;
+    }
+    const effective = analysisWorkerConfig.update(request.body);
+    analysisWorker.setWorkerCount(effective.worker_count);
     response.json(effective);
   });
 
@@ -839,7 +923,9 @@ export async function createApp(options: CreateAppOptions): Promise<{
         candidateReview
           .list(null)
           .filter(
-            ({ status }) => status === "proposed" || status === "pending"
+            ({ kind, status }) =>
+              kind === "knowledge" &&
+              (status === "proposed" || status === "pending")
           )
           .map((candidate) => ({
             ...candidate,
@@ -890,9 +976,6 @@ export async function createApp(options: CreateAppOptions): Promise<{
       return;
     }
     const operation = await candidateReview.accept(request.params.id);
-    if (operation.state === "accepted") {
-      await markdownIndexSync.refreshPath(operation.documentPath);
-    }
     if (operation.state === "conflict") {
       response.status(409).json({
         error: operation.error ?? "候选物化发生冲突",

@@ -30,6 +30,11 @@ export interface StoredUpstreamPerson {
   updatedAt: string;
 }
 
+export interface SourceIdentity {
+  provider: string;
+  externalId: string;
+}
+
 interface SourceRow {
   id: string;
   provider: string;
@@ -273,6 +278,59 @@ export class MachineContextRepository {
     return rows.map((row) =>
       this.hydrateSource(row, participantsBySource.get(row.id) ?? [])
     );
+  }
+
+  provenanceSources(options: {
+    sourceIds?: string[];
+    identities?: SourceIdentity[];
+    limit: number;
+    offset: number;
+  }): { sources: StoredSource[]; total: number } {
+    const sourceIds = [...new Set(options.sourceIds ?? [])];
+    const identities = [
+      ...new Map(
+        (options.identities ?? []).map((identity) => [
+          `${identity.provider}\u0000${identity.externalId}`,
+          identity
+        ])
+      ).values()
+    ];
+    const conditions: string[] = [];
+    const parameters: unknown[] = [];
+    if (sourceIds.length) {
+      conditions.push(`source.id IN (${sourceIds.map(() => "?").join(", ")})`);
+      parameters.push(...sourceIds);
+    }
+    for (const identity of identities) {
+      conditions.push(
+        `(source.provider = ? AND source.id IN (
+          SELECT participant.source_id
+          FROM source_participants participant
+          WHERE participant.provider_id = ?
+        ))`
+      );
+      parameters.push(identity.provider, identity.externalId);
+    }
+    if (!conditions.length) return { sources: [], total: 0 };
+    const where = `WHERE ${conditions.join(" OR ")}`;
+    const total = (
+      this.database.connection
+        .prepare(`SELECT COUNT(*) AS count FROM sources source ${where}`)
+        .get(...parameters) as { count: number }
+    ).count;
+    const rows = this.database.connection
+      .prepare(
+        `SELECT source.*
+         FROM sources source
+         ${where}
+         ORDER BY source.occurred_at DESC, source.id
+         LIMIT ? OFFSET ?`
+      )
+      .all(...parameters, options.limit, options.offset) as SourceRow[];
+    return {
+      sources: rows.map((row) => this.hydrateSource(row)),
+      total
+    };
   }
 
   markAnalyzed(

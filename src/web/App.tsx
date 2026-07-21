@@ -73,10 +73,17 @@ import "./styles.css";
 interface ApiDocument<T extends BaseMetadata = BaseMetadata> extends WorkspaceDocument<T> {
   provenanceSources?: Array<{
     id: string;
+    provider: string;
     title: string;
     body: string | null;
     occurred_at: string;
     source_kind: SourceMetadata["source_kind"];
+    body_purged_at?: string | null;
+    sender: {
+      person_id: string;
+      external_id: string;
+      display_name: string;
+    } | null;
   }>;
   provenancePagination?: {
     page: number;
@@ -89,7 +96,6 @@ interface ApiDocument<T extends BaseMetadata = BaseMetadata> extends WorkspaceDo
     waitingOnThem: TodoMetadata[];
     shared: TodoMetadata[];
   };
-  pendingInsights?: ReviewCandidate[];
   acceptedInsights?: Array<{
     id: string;
     title: string;
@@ -569,16 +575,29 @@ function ProvenanceSource({
     .replace(/\*\*Occurred:\*\*.*\n?/u, "")
     .trim();
   return (
-    <Link
-      className="provenance-source"
-      to={`/documents/${encodeURIComponent(source.id)}`}
-    >
+    <article className="provenance-source">
       <span>
-        <strong>{source.title}</strong>
-        <small>{formatDate(source.occurred_at)}</small>
+        <Link to={`/documents/${encodeURIComponent(source.id)}`}>
+          <strong>{source.title}</strong>
+        </Link>
+        <small>{source.provider} · {source.source_kind} · {formatDate(source.occurred_at)}</small>
       </span>
-      <p>{excerpt || "该来源没有文本内容。"}</p>
-    </Link>
+      {source.sender && (
+        <div className="provenance-sender">
+          <span>发送人</span>
+          <Link to={`/documents/${encodeURIComponent(source.sender.person_id)}`}>
+            {source.sender.display_name}
+          </Link>
+          <code>{source.sender.external_id}</code>
+        </div>
+      )}
+      <code>{source.id}</code>
+      <p>
+        {excerpt || (source.body_purged_at
+          ? `来源正文已于 ${formatDate(source.body_purged_at)} 按保留策略清理。`
+          : "该来源没有文本内容。")}
+      </p>
+    </article>
   );
 }
 
@@ -688,7 +707,6 @@ function NowPage() {
 }
 
 function InboxPage() {
-  const navigate = useNavigate();
   const { data, loading, error, reload } = useApi<ReviewCandidate[]>("/api/candidates", []);
   const [acting, setActing] = useState<string | null>(null);
   const [confirmError, setConfirmError] = useState("");
@@ -700,15 +718,11 @@ function InboxPage() {
     setActing(candidate.id);
     setConfirmError("");
     try {
-      const result = await api<AcceptanceOperation>(
+      await api<AcceptanceOperation>(
         `/api/candidates/${encodeURIComponent(candidate.id)}/${action}`,
         { method: "POST" }
       );
-      if (action === "accept" && result.documentId) {
-        navigate(`/documents/${encodeURIComponent(result.documentId)}`);
-      } else {
-        await reload();
-      }
+      await reload();
     } catch (caught) {
       setConfirmError(caught instanceof Error ? caught.message : String(caught));
       await reload();
@@ -719,7 +733,7 @@ function InboxPage() {
 
   return (
     <>
-      <PageHeader eyebrow="Review queue" title="Inbox" description="不确定的 Todo 和知识先在这里等待确认，而不是直接污染事实。" />
+      <PageHeader eyebrow="Review queue" title="Inbox" description="只有知识草稿需要人工确认；Todo 和职场洞察会直接写入对应集合。" />
       <ErrorBanner message={error ?? confirmError} />
       <div className="document-grid">
         {data.map((candidate) => (
@@ -760,7 +774,7 @@ function InboxPage() {
               </Link>
               <button
                 aria-label={`拒绝 ${candidate.title}`}
-                className="secondary-button"
+                className="candidate-action secondary-button"
                 disabled={acting === candidate.id}
                 onClick={() => void reviewCandidate(candidate, "reject")}
                 type="button"
@@ -770,7 +784,7 @@ function InboxPage() {
               </button>
               <button
                 aria-label={`确认 ${candidate.title}`}
-                className="confirm-candidate"
+                className="candidate-action confirm-candidate"
                 disabled={acting === candidate.id}
                 onClick={() => void reviewCandidate(candidate, "accept")}
                 type="button"
@@ -786,7 +800,7 @@ function InboxPage() {
           </article>
         ))}
       </div>
-      {!data.length && <EmptyState icon={Inbox} title={loading ? "正在加载…" : "Inbox 已清空"} description="低置信度推断会保留来源并进入这里。" />}
+      {!data.length && <EmptyState icon={Inbox} title={loading ? "正在加载…" : "Inbox 已清空"} description="待确认的知识草稿会保留来源并进入这里。" />}
     </>
   );
 }
@@ -1071,6 +1085,9 @@ interface ConfigResponse {
     current_provider: string;
     config_source: "workspace" | "environment";
     provider_locked: boolean;
+    worker_count: number;
+    worker_count_source: "workspace" | "environment";
+    worker_count_locked: boolean;
     config: AnalysisConfig;
     providers: Array<{ id: string } & ProviderAvailability>;
     prompt_version: string;
@@ -1092,6 +1109,9 @@ function SettingsPage() {
       current_provider: "codex-sdk",
       config_source: "workspace",
       provider_locked: false,
+      worker_count: 1,
+      worker_count_source: "workspace",
+      worker_count_locked: false,
       config: {
         provider: "codex-sdk",
         model: null,
@@ -1101,12 +1121,12 @@ function SettingsPage() {
         max_batch_records: 50,
         max_batch_source_chars: 60000,
         max_output_bytes: 2000000,
-        prompt_version: "context-analysis@2",
+        prompt_version: "context-analysis@4",
         retain_runs: 50,
         max_reanalysis_records: 50
       },
       providers: [],
-      prompt_version: "context-analysis@2",
+      prompt_version: "context-analysis@4",
       schema_version: "work-context/analysis@2",
       status: {
         schema: "work-context/analysis-status@1",
@@ -1152,6 +1172,7 @@ function SettingsPage() {
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [savingReasoningEffort, setSavingReasoningEffort] = useState(false);
+  const [savingWorkerCount, setSavingWorkerCount] = useState(false);
   const [savingRetention, setSavingRetention] = useState(false);
   const [retryingJob, setRetryingJob] = useState<string | null>(null);
   const [leaderQuery, setLeaderQuery] = useState("");
@@ -1310,6 +1331,26 @@ function SettingsPage() {
     }
   }
 
+  async function saveWorkerCount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingWorkerCount(true);
+    setMessage("");
+    const raw = new FormData(event.currentTarget).get("worker_count");
+    const workerCount = Number(raw);
+    try {
+      await api("/api/config/analysis/workers", {
+        method: "PUT",
+        body: JSON.stringify({ worker_count: workerCount })
+      });
+      setMessage(`LLM Worker 已调整为 ${workerCount}；新并发度立即生效。`);
+      await config.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingWorkerCount(false);
+    }
+  }
+
   async function saveRetention(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSavingRetention(true);
@@ -1454,6 +1495,36 @@ function SettingsPage() {
               </button>
             </form>
           )}
+          <form className="model-control" onSubmit={saveWorkerCount}>
+            <label className="provider-control">
+              <span>并行分析 Worker（1–8）</span>
+              <input
+                key={config.data.analysis.worker_count}
+                aria-label="LLM Worker 数量"
+                defaultValue={config.data.analysis.worker_count}
+                disabled={config.data.analysis.worker_count_locked}
+                max={8}
+                min={1}
+                name="worker_count"
+                required
+                type="number"
+              />
+            </label>
+            <button
+              className="secondary-button"
+              disabled={
+                savingWorkerCount || config.data.analysis.worker_count_locked
+              }
+              type="submit"
+            >
+              {savingWorkerCount ? "保存中…" : "保存 Worker 数量"}
+            </button>
+          </form>
+          {config.data.analysis.worker_count_locked && (
+            <p className="muted-copy">
+              Worker 数量由 CONTEXT_SPACE_ANALYSIS_WORKERS 环境变量锁定。
+            </p>
+          )}
           <div className="provider-list">
             {config.data.analysis.providers.map((provider) => (
               <div key={provider.id}>
@@ -1495,6 +1566,7 @@ function SettingsPage() {
             )}
             <div><span>每批记录</span><strong>{config.data.analysis.config.max_batch_records}</strong></div>
             <div><span>每批来源字符</span><strong>{config.data.analysis.config.max_batch_source_chars}</strong></div>
+            <div><span>并行 Worker</span><strong>{config.data.analysis.worker_count}</strong></div>
           </div>
           {config.data.analysis.status.last_error_message && (
             <p className="provider-error">{config.data.analysis.status.last_error_message}</p>
@@ -1803,22 +1875,6 @@ function DocumentPage() {
               </div>
             </Section>
           )}
-          {person && Boolean(document.pendingInsights?.length) && (
-            <Section title="待审核洞察" subtitle="SQLite 候选 · 尚未写入人物备注">
-              <div className="observation-list">
-                {document.pendingInsights!.map((insight) => (
-                  <article className="observation" key={insight.id}>
-                    <div className="observation-head">
-                      <Badge tone="amber">{insight.status}</Badge>
-                      <span>{Math.round(insight.confidence * 100)}%</span>
-                    </div>
-                    <strong>{String(insight.data.text ?? insight.title)}</strong>
-                    <Link className="text-link" to="/inbox">前往 Inbox 审核</Link>
-                  </article>
-                ))}
-              </div>
-            </Section>
-          )}
           {person && Boolean(document.acceptedInsights?.length) && (
             <Section title="已接受洞察" subtitle="独立人工 Markdown 备注">
               <div className="observation-list">
@@ -1839,21 +1895,17 @@ function DocumentPage() {
           )}
           <Section title="Provenance">
             <div className="source-refs">
-              {person
-                ? document.provenanceSources?.map((source) => (
-                    <ProvenanceSource key={source.id} source={source} />
-                  ))
-                : document.data.source_refs.map((reference) => (
-                    <code key={reference}>{reference}</code>
-                  ))}
-              {person && !document.provenanceSources?.length && (
+              {document.provenanceSources?.map((source) => (
+                <ProvenanceSource key={source.id} source={source} />
+              ))}
+              {!document.provenanceSources?.length && document.data.source_refs.map((reference) => (
+                <code key={reference}>{reference}</code>
+              ))}
+              {!document.provenanceSources?.length && !document.data.source_refs.length && (
                 <span className="muted-copy">没有可解析的来源消息</span>
               )}
-              {!person && !document.data.source_refs.length && (
-                <span className="muted-copy">Manual or baseline document</span>
-              )}
             </div>
-            {person && document.provenancePagination && document.provenancePagination.total_pages > 1 && (
+            {document.provenancePagination && document.provenancePagination.total_pages > 1 && (
               <div className="provenance-pagination">
                 <button
                   aria-label="上一页 Provenance"

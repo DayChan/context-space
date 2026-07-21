@@ -52,6 +52,14 @@ export const analysisConfigSchema = analysisConfigObjectSchema.superRefine(
 
 const analysisConfigUpdateSchema = analysisConfigObjectSchema.partial();
 
+export function normalizeAnalysisPromptVersion(value: unknown): unknown {
+  return value === "context-analysis@1" ||
+    value === "context-analysis@2" ||
+    value === "context-analysis@3"
+    ? ANALYSIS_PROMPT_VERSION
+    : value;
+}
+
 export class AnalysisConfigService {
   constructor(
     private readonly storage: SettingsRepository | MarkdownStore,
@@ -59,11 +67,16 @@ export class AnalysisConfigService {
   ) {}
 
   async getEffective(): Promise<EffectiveAnalysisConfig> {
+    const stored =
+      this.storage instanceof SettingsRepository
+        ? this.storage.get<Partial<AnalysisConfig>>("analysis_config") ?? {}
+        : await this.readLegacyConfig();
     const fromWorkspace = analysisConfigSchema.parse({
       ...DEFAULT_ANALYSIS_CONFIG,
-      ...(this.storage instanceof SettingsRepository
-        ? this.storage.get<Partial<AnalysisConfig>>("analysis_config") ?? {}
-        : await this.readLegacyConfig())
+      ...stored,
+      prompt_version: normalizeAnalysisPromptVersion(
+        stored.prompt_version ?? DEFAULT_ANALYSIS_CONFIG.prompt_version
+      )
     });
     const override = this.environment.CONTEXT_SPACE_ANALYSIS_PROVIDER?.trim();
     return {
@@ -118,10 +131,15 @@ export async function importLegacyAnalysisConfig(
 ): Promise<AnalysisConfig> {
   const existing = settings.get<AnalysisConfig>("analysis_config");
   if (existing) {
-    return analysisConfigSchema.parse({
+    const migrated = analysisConfigSchema.parse({
       ...DEFAULT_ANALYSIS_CONFIG,
-      ...existing
+      ...existing,
+      prompt_version: normalizeAnalysisPromptVersion(existing.prompt_version)
     });
+    if (migrated.prompt_version !== existing.prompt_version) {
+      settings.set("analysis_config", migrated);
+    }
+    return migrated;
   }
   if (!(await store.exists("config/analysis.md"))) {
     settings.set("analysis_config", DEFAULT_ANALYSIS_CONFIG);
@@ -136,9 +154,9 @@ export async function importLegacyAnalysisConfig(
   const imported = analysisConfigSchema.parse({
     ...DEFAULT_ANALYSIS_CONFIG,
     ...legacyValues,
-    ...(legacyValues.prompt_version === "context-analysis@1"
-      ? { prompt_version: ANALYSIS_PROMPT_VERSION }
-      : {})
+    prompt_version: normalizeAnalysisPromptVersion(
+      legacyValues.prompt_version ?? DEFAULT_ANALYSIS_CONFIG.prompt_version
+    )
   });
   settings.set("analysis_config", imported);
   return imported;

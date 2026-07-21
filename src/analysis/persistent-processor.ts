@@ -11,7 +11,11 @@ import {
   type AnalysisJob
 } from "../machine";
 import { nullLogger, withLogContext, type Logger } from "../logging";
-import { analysisConfigSchema, DEFAULT_ANALYSIS_CONFIG } from "./config";
+import {
+  analysisConfigSchema,
+  DEFAULT_ANALYSIS_CONFIG,
+  normalizeAnalysisPromptVersion
+} from "./config";
 import {
   AnalysisProviderError,
   sanitizedErrorMessage,
@@ -19,6 +23,7 @@ import {
   type AnalysisErrorCode
 } from "./contracts";
 import { buildAnalysisPrompt, ANALYSIS_PROMPT_VERSION } from "./prompt";
+import type { CandidateReviewService } from "./candidate-review";
 import { AnalysisProviderRegistry } from "./providers/registry";
 import { hashStableValue } from "./run-store";
 import {
@@ -59,9 +64,13 @@ function retryable(error: unknown): boolean {
 
 function jobConfig(job: AnalysisJob): PersistentAnalysisJobConfig {
   const envelope = job.config as Partial<PersistentAnalysisJobConfig>;
+  const storedAnalysis = envelope.analysis ?? job.config;
   const analysis = analysisConfigSchema.parse({
     ...DEFAULT_ANALYSIS_CONFIG,
-    ...(envelope.analysis ?? job.config)
+    ...storedAnalysis,
+    prompt_version: normalizeAnalysisPromptVersion(
+      storedAnalysis.prompt_version ?? DEFAULT_ANALYSIS_CONFIG.prompt_version
+    )
   });
   if (analysis.prompt_version !== ANALYSIS_PROMPT_VERSION) {
     throw new AnalysisProviderError(
@@ -173,48 +182,45 @@ export class PersistentAnalysisProcessor {
     private readonly jobs: AnalysisJobRepository,
     private readonly results: AnalysisResultRepository,
     private readonly registry: AnalysisProviderRegistry,
+    private readonly candidateReview: CandidateReviewService,
     logger: Logger = nullLogger
   ) {
     this.logger = logger.child({ component: "persistent-analysis" });
   }
 
   async process(job: AnalysisJob, workerId: string): Promise<void> {
-    const config = jobConfig(job);
-    const records = job.sourceIds.map((sourceId) => {
-      const source = this.sources.getSource(sourceId);
-      if (!source) {
-        throw new AnalysisProviderError(
-          "configuration_error",
-          `分析来源不存在：${sourceId}`,
-          false
-        );
-      }
-      return normalizedRecord(source);
-    });
-    const prompt = buildAnalysisPrompt(records, {
-      currentUserId: config.currentUserId,
-      timezone: config.timezone,
-      maxSourceChars: config.analysis.max_source_chars
-    });
-    const runId = `analysis_run_${hashStableValue({
-      jobId: job.id,
-      attempt: job.attempts
-    }).slice(0, 24)}`;
-    const configHash = hashStableValue(config.analysis);
+    const runId = `analysis_run_${randomUUID().replaceAll("-", "")}`;
 
     await withLogContext({ run_id: runId, batch_id: runId }, async () => {
-      this.results.beginRun({
-        id: runId,
-        jobId: job.id,
-        provider: config.analysis.provider,
-        model: config.analysis.model,
-        promptVersion: config.analysis.prompt_version,
-        schemaVersion: ANALYSIS_SCHEMA_VERSION,
-        configHash
-      });
       let temporaryDirectory: string | null = null;
       let eventTypes: string[] = [];
       try {
+        const config = jobConfig(job);
+        const records = job.sourceIds.map((sourceId) => {
+          const source = this.sources.getSource(sourceId);
+          if (!source) {
+            throw new AnalysisProviderError(
+              "configuration_error",
+              `分析来源不存在：${sourceId}`,
+              false
+            );
+          }
+          return normalizedRecord(source);
+        });
+        const prompt = buildAnalysisPrompt(records, {
+          currentUserId: config.currentUserId,
+          timezone: config.timezone,
+          maxSourceChars: config.analysis.max_source_chars
+        });
+        this.results.beginRun({
+          id: runId,
+          jobId: job.id,
+          provider: config.analysis.provider,
+          model: config.analysis.model,
+          promptVersion: config.analysis.prompt_version,
+          schemaVersion: ANALYSIS_SCHEMA_VERSION,
+          configHash: hashStableValue(config.analysis)
+        });
         const provider = this.registry.get(config.analysis.provider);
         const availability = await provider.getAvailability();
         if (!availability.available) {
@@ -245,18 +251,37 @@ export class PersistentAnalysisProcessor {
           records,
           prompt
         );
+        const candidates = outputCandidates(runId, output);
         this.results.completeRun({
           runId,
           jobId: job.id,
           workerId,
           sourceIds: job.sourceIds,
-          candidates: outputCandidates(runId, output),
+          candidates,
           eventTypes: response.eventTypes,
           usage: response.usage
         });
+        const publication = await this.candidateReview.publishWithoutReview(
+          candidates.map(({ id }) => id)
+        );
+        const conflicts = publication.operations.filter(
+          ({ state }) => state === "conflict"
+        );
+        if (publication.failures.length || conflicts.length) {
+          this.logger.error("analysis.automatic_publication.incomplete", {
+            job_id: job.id,
+            failure_count: publication.failures.length,
+            conflict_count: conflicts.length,
+            failures: publication.failures,
+            conflict_candidate_ids: conflicts.map(({ candidateId }) => candidateId)
+          });
+        }
         this.logger.info("analysis.job.succeeded", {
           job_id: job.id,
-          candidate_count: output.items.length + output.person_insights.length
+          candidate_count: output.items.length + output.person_insights.length,
+          published_without_review_count: publication.operations.filter(
+            ({ state }) => state === "accepted"
+          ).length
         });
       } catch (error) {
         const code = errorCode(error);

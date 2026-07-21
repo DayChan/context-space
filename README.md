@@ -2,7 +2,7 @@
 
 Context Space 是一个单用户、本机运行的工作上下文系统。它通过 `lark-cli` 只读采集与工作有关的飞书消息、日程、任务和人物，并在本地 Web 界面中呈现 Todo、人物、知识、时间线和 Loop 就绪状态。
 
-存储按所有权拆分：人工维护的 Todo、人物备注和知识以 Markdown 为规范真相；飞书来源、上游数据、同步状态、设置、分析队列、LLM 候选和审核状态以 `.context/context-space.db` 中的 SQLite 为规范真相。所有 LLM 输出都必须先进入 Inbox，由用户接受后才能物化为 Markdown。
+存储按所有权拆分：人工维护的 Todo、人物备注和知识以 Markdown 为规范真相；飞书来源、上游数据、同步状态、设置、分析队列、LLM 候选和审核状态以 `.context/context-space.db` 中的 SQLite 为规范真相。LLM 生成的 Todo 和职场洞察会通过幂等流程直接物化为 Markdown；只有知识必须先进入 Inbox，由用户接受后才能物化。
 
 ## V1 安全边界
 
@@ -64,7 +64,7 @@ curl -X POST http://127.0.0.1:4318/api/sync/lark \
 
 如果 `lark-cli` 返回权限不足、认证失效、参数错误或升级通知，Settings 会展示对应来源、错误代码、缺失 scope、官方处理提示以及可用的权限配置或排查链接。系统只提醒，不会自动授权或执行 `lark-cli update`。同步部分失败时，成功来源仍会保留并推进各自检查点。
 
-同步只负责把来源、上游任务、身份、游标和分析任务原子提交到 SQLite，采集完成后立即返回，不等待 LLM。单个本地 Worker 以至少一次交付、确定性幂等键和有期限租约异步消费分析任务；Settings 分别展示同步运行和分析队列状态。
+同步只负责把来源、上游任务、身份、游标和分析任务原子提交到 SQLite，采集完成后立即返回，不等待 LLM。本地 Worker Pool 以至少一次交付、确定性幂等键和有期限租约异步消费分析任务；Settings 分别展示同步运行和分析队列状态。
 
 ## LLM 内容分析
 
@@ -79,7 +79,7 @@ max_source_chars: 20000
 max_batch_records: 50
 max_batch_source_chars: 60000
 max_output_bytes: 2000000
-prompt_version: context-analysis@2
+prompt_version: context-analysis@4
 retain_runs: 50
 max_reanalysis_records: 50
 ```
@@ -104,7 +104,16 @@ Codex SDK 支持选择模型和推理强度：非空 `model` 与 `reasoning_effo
 
 部署时可以使用 `CONTEXT_SPACE_ANALYSIS_PROVIDER=codex-sdk` 或 `codex-exec` 覆盖 SQLite 配置。覆盖生效时 Settings 的 Provider 选择会被锁定。认证信息只应保存在 Codex 自身认证存储或进程环境中。
 
-批量输出除 Todo 和知识候选外，还可生成以下人物观察：
+LLM Worker 数量是独立的调度配置，不进入分析任务快照或幂等键。可在 Settings 中设置为 `1–8`，默认 `1`；扩容立即开始并行领取任务，缩容不会中断正在运行的分析。也可以用 `CONTEXT_SPACE_ANALYSIS_WORKERS=1` 覆盖并锁定该配置，或调用：
+
+```bash
+curl -X PUT http://127.0.0.1:4318/api/config/analysis/workers \
+  -H 'Content-Type: application/json' \
+  -H "x-context-space-csrf: ${CSRF_TOKEN}" \
+  -d '{"worker_count":2}'
+```
+
+批量输出除 Todo 和知识结果外，还可生成以下人物观察：
 
 - 职责
 - 沟通方式

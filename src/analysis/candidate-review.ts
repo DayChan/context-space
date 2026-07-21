@@ -13,6 +13,11 @@ import {
   type StoredCandidate
 } from "../machine";
 
+export interface AutomaticPublicationResult {
+  operations: AcceptanceOperation[];
+  failures: Array<{ candidateId: string; error: string }>;
+}
+
 function safeSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 140);
 }
@@ -172,7 +177,8 @@ function documentMetadata(
 export class CandidateReviewService {
   constructor(
     private readonly results: AnalysisResultRepository,
-    private readonly store: MarkdownStore
+    private readonly store: MarkdownStore,
+    private readonly onMaterialized: (path: string) => Promise<void> = async () => {}
   ) {}
 
   list(status: StoredCandidate["status"] | null = "proposed") {
@@ -201,7 +207,35 @@ export class CandidateReviewService {
     }
     operation = await this.materialize(candidate, operation);
     if (operation.state === "conflict") return operation;
+    await this.onMaterialized(operation.documentPath);
     return this.results.markAccepted(candidateId);
+  }
+
+  async publishWithoutReview(
+    candidateIds?: string[]
+  ): Promise<AutomaticPublicationResult> {
+    const candidates = candidateIds
+      ? candidateIds.flatMap((id) => {
+          const candidate = this.results.getCandidate(id);
+          return candidate ? [candidate] : [];
+        })
+      : this.results.listCandidates("proposed");
+    const operations: AcceptanceOperation[] = [];
+    const failures: AutomaticPublicationResult["failures"] = [];
+    for (const candidate of candidates) {
+      if (candidate.kind === "knowledge" || candidate.status !== "proposed") {
+        continue;
+      }
+      try {
+        operations.push(await this.accept(candidate.id));
+      } catch (error) {
+        failures.push({
+          candidateId: candidate.id,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+    return { operations, failures };
   }
 
   async recover(): Promise<AcceptanceOperation[]> {
@@ -218,11 +252,12 @@ export class CandidateReviewService {
         continue;
       }
       const materialized = await this.materialize(candidate, operation);
-      recovered.push(
-        materialized.state === "conflict"
-          ? materialized
-          : this.results.markAccepted(operation.candidateId)
-      );
+      if (materialized.state === "conflict") {
+        recovered.push(materialized);
+        continue;
+      }
+      await this.onMaterialized(materialized.documentPath);
+      recovered.push(this.results.markAccepted(operation.candidateId));
     }
     return recovered;
   }

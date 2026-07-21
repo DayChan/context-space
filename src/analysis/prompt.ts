@@ -3,7 +3,7 @@ import { personIdForIdentity } from "../core/people";
 import type { NormalizedSourceRecord } from "../core/types";
 import { ANALYSIS_SCHEMA_VERSION } from "./schema";
 
-export const ANALYSIS_PROMPT_VERSION = "context-analysis@2" as const;
+export const ANALYSIS_PROMPT_VERSION = "context-analysis@4" as const;
 
 export interface AnalysisPromptContext {
   currentUserId: string;
@@ -123,12 +123,13 @@ export function buildAnalysisPrompt(
     "",
     "Todo 与知识规则：",
     "- todo 表示当前用户承诺完成、等待他人完成或双方共同推进的具体工作。分别使用 owed_by_me、waiting_on_them、shared。",
-    "- 明确且可直接进入工作队列的行动项使用 status=open；含义、归属或真实性仍需人工确认时使用 status=candidate。",
+    "- Todo 会直接进入工作队列，因此只输出含义、归属和真实性足够明确的行动项，并统一使用 status=open；不确定时不要输出 Todo。",
     "- 否定、取消、已拒绝、纯假设、资讯陈述、寒暄和没有可执行结果的讨论不应输出 Todo。",
     "- knowledge 表示值得沉淀的项目、决策、操作手册、概念、术语或其他草稿；普通聊天不应输出。",
     "- 可以综合整批上下文理解含义；每个结论只能引用真正支撑它的来源。",
     "",
     "人物洞察规则：",
+    "- 职场洞察会直接写入人物备注，不经过人工审核；只有证据充分、表述可修正且值得长期保留时才输出，不确定时不要输出。",
     "- 只分析 participants 中除 current_user_id 外的人物。",
     "- category=responsibility 表示消息明确支持的工作职责或持续负责范围。",
     "- communication_style、collaboration_style、work_preference 只能描述有范围、可修正的职场行为，不得写成不可变人格标签。",

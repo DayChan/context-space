@@ -1,4 +1,5 @@
-import { AnalysisJobRepository } from "../machine";
+import { z } from "zod";
+import { AnalysisJobRepository, SettingsRepository } from "../machine";
 import { nullLogger, type Logger } from "../logging";
 import {
   newWorkerId,
@@ -8,6 +9,58 @@ import {
 export interface AnalysisWorkerOptions {
   idleDelayMilliseconds?: number;
   leaseMilliseconds?: number;
+}
+
+export const DEFAULT_ANALYSIS_WORKER_COUNT = 1;
+export const MAX_ANALYSIS_WORKER_COUNT = 8;
+
+const workerCountSchema = z.number().int().min(1).max(MAX_ANALYSIS_WORKER_COUNT);
+
+export interface EffectiveAnalysisWorkerConfig {
+  worker_count: number;
+  source: "workspace" | "environment";
+  locked: boolean;
+}
+
+export class AnalysisWorkerConfigService {
+  constructor(
+    private readonly settings: SettingsRepository,
+    private readonly environment: NodeJS.ProcessEnv = process.env
+  ) {}
+
+  getEffective(): EffectiveAnalysisWorkerConfig {
+    const override = this.environment.CONTEXT_SPACE_ANALYSIS_WORKERS?.trim();
+    if (override) {
+      return {
+        worker_count: workerCountSchema.parse(Number(override)),
+        source: "environment",
+        locked: true
+      };
+    }
+    const stored = this.settings.get<number>("analysis_worker_count");
+    return {
+      worker_count: workerCountSchema.parse(
+        stored ?? DEFAULT_ANALYSIS_WORKER_COUNT
+      ),
+      source: "workspace",
+      locked: false
+    };
+  }
+
+  update(input: unknown): EffectiveAnalysisWorkerConfig {
+    const { worker_count } = z
+      .object({ worker_count: workerCountSchema })
+      .strict()
+      .parse(input);
+    const current = this.getEffective();
+    if (current.locked && worker_count !== current.worker_count) {
+      throw new Error("LLM Worker 数量已被环境变量锁定");
+    }
+    if (!current.locked) {
+      this.settings.set("analysis_worker_count", worker_count);
+    }
+    return this.getEffective();
+  }
 }
 
 export class AnalysisWorker {
@@ -36,7 +89,13 @@ export class AnalysisWorker {
     this.stopping = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    await this.running;
+    try {
+      await this.running;
+    } catch (error) {
+      this.logger.error("analysis.worker.stop_after_iteration_failure", {
+        error
+      });
+    }
   }
 
   async runOnce(now = new Date()): Promise<boolean> {
@@ -90,5 +149,68 @@ export class AnalysisWorker {
         });
     }, delay);
     this.timer.unref();
+  }
+}
+
+export class AnalysisWorkerPool {
+  private readonly workers: AnalysisWorker[] = [];
+  private readonly retiring = new Set<Promise<void>>();
+  private started = false;
+
+  constructor(
+    private readonly jobs: AnalysisJobRepository,
+    private readonly processor: PersistentAnalysisProcessor,
+    private readonly logger: Logger = nullLogger,
+    private readonly options: AnalysisWorkerOptions = {},
+    workerCount = DEFAULT_ANALYSIS_WORKER_COUNT
+  ) {
+    this.resize(workerCount);
+  }
+
+  get workerCount(): number {
+    return this.workers.length;
+  }
+
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    for (const worker of this.workers) worker.start();
+  }
+
+  setWorkerCount(workerCount: number): void {
+    this.resize(workerCount);
+  }
+
+  async stop(): Promise<void> {
+    this.started = false;
+    const active = this.workers.splice(0).map((worker) => worker.stop());
+    await Promise.all([...active, ...this.retiring]);
+  }
+
+  async runOnce(now = new Date()): Promise<boolean> {
+    const results = await Promise.all(
+      this.workers.map((worker) => worker.runOnce(now))
+    );
+    return results.some(Boolean);
+  }
+
+  private resize(workerCount: number): void {
+    const desired = workerCountSchema.parse(workerCount);
+    while (this.workers.length < desired) {
+      const worker = new AnalysisWorker(
+        this.jobs,
+        this.processor,
+        this.logger,
+        this.options
+      );
+      this.workers.push(worker);
+      if (this.started) worker.start();
+    }
+    while (this.workers.length > desired) {
+      const worker = this.workers.pop()!;
+      const retirement = worker.stop();
+      this.retiring.add(retirement);
+      void retirement.then(() => this.retiring.delete(retirement));
+    }
   }
 }

@@ -74,7 +74,7 @@ const BASELINE_FILES: Array<{ path: string; data: BaseMetadata; body: string }> 
       max_batch_records: 50,
       max_batch_source_chars: 60000,
       max_output_bytes: 2000000,
-      prompt_version: "context-analysis@2",
+      prompt_version: "context-analysis@4",
       retain_runs: 50,
       max_reanalysis_records: 50
     }),
@@ -194,8 +194,10 @@ export async function initializeWorkspace(root: string): Promise<MarkdownStore> 
           )
         }
       : {}),
-    ...(analysisConfig.data.prompt_version === "context-analysis@1"
-      ? { prompt_version: "context-analysis@2" }
+    ...(["context-analysis@1", "context-analysis@2", "context-analysis@3"].includes(
+      String(analysisConfig.data.prompt_version)
+    )
+      ? { prompt_version: "context-analysis@4" }
       : {})
   };
   if (

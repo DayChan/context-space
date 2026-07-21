@@ -153,7 +153,7 @@ describe("versioned prompt and structured validation", () => {
         "hasTrustBoundary": true,
         "hashStable": true,
         "schemaVersion": "work-context/analysis@2",
-        "version": "context-analysis@2",
+        "version": "context-analysis@4",
       }
     `);
   });
@@ -670,7 +670,7 @@ describe("analysis coordinator integration", () => {
     const migratedStore = await initializeWorkspace(root);
     const migrated = await migratedStore.read("config/analysis.md");
     expect(migrated.data).toMatchObject({
-      prompt_version: "context-analysis@2",
+      prompt_version: "context-analysis@4",
       reasoning_effort: "medium",
       max_batch_records: 50,
       max_batch_source_chars: 60000

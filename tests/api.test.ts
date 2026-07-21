@@ -70,7 +70,8 @@ describe("local API", () => {
     kind: NormalizedSourceRecord["kind"],
     occurredAt: string,
     text: string,
-    title = id
+    title = id,
+    participants: NormalizedSourceRecord["participants"] = []
   ): NormalizedSourceRecord {
     return {
       sourceId: id,
@@ -79,7 +80,7 @@ describe("local API", () => {
       title,
       text,
       occurredAt,
-      participants: [],
+      participants,
       metadata: {}
     };
   }
@@ -249,14 +250,16 @@ describe("local API", () => {
       .expect(400);
   });
 
-  it("confirms Todo and knowledge candidates into canonical collections", async () => {
+  it("publishes Todo directly and requires confirmation for durable knowledge", async () => {
     const timestamp = "2026-07-20T00:00:00.000Z";
     context.runtime.machineContext.upsertSource(
       machineSource(
         "lark:message:decision",
         "mention",
         timestamp,
-        "需要确认发布计划，并记录发布决策"
+        "需要确认发布计划，并记录发布决策",
+        "发布群",
+        [{ provider_id: "ou_sender", name: "发送者", role: "sender" }]
       )
     );
     context.runtime.analysisJobs.enqueue({
@@ -275,7 +278,7 @@ describe("local API", () => {
       jobId: "job_api_candidates",
       provider: "codex-sdk",
       model: null,
-      promptVersion: "context-analysis@2",
+      promptVersion: "context-analysis@4",
       schemaVersion: "work-context/analysis@2",
       configHash: "config",
       startedAt: timestamp
@@ -352,6 +355,7 @@ describe("local API", () => {
         }
       ]
     });
+    await context.runtime.candidateReview.publishWithoutReview();
     const person: PersonMetadata = {
       schema: "work-context/person@1",
       id: "person_candidate_target",
@@ -377,11 +381,17 @@ describe("local API", () => {
     await context.runtime.markdownIndexSync.refreshPath(
       "people/person_candidate_target.md"
     );
-    const beforePersonAcceptance = await request(context.app)
+    const personDetail = await request(context.app)
       .get("/api/documents/person_candidate_target")
       .expect(200);
-    expect(beforePersonAcceptance.body.pendingInsights).toEqual([
-      expect.objectContaining({ id: "candidate_person_api" })
+    expect(personDetail.body.pendingInsights).toBeUndefined();
+    expect(personDetail.body.acceptedInsights).toEqual([
+      expect.objectContaining({
+        id: "person_insight_candidate_person_api",
+        observations: [
+          expect.objectContaining({ text: "评审前会汇总阻塞" })
+        ]
+      })
     ]);
     expect(
       context.runtime.analysisResults
@@ -394,15 +404,43 @@ describe("local API", () => {
         "candidate_person_api"
       ])
     );
-
-    const todoResponse = await authorized(
-      request(context.app).post("/api/candidates/candidate_todo_api/accept")
-    )
+    expect(
+      context.runtime.analysisResults.getCandidate("candidate_todo_api")?.status
+    ).toBe("accepted");
+    expect(
+      context.runtime.analysisResults.getCandidate("candidate_person_api")?.status
+    ).toBe("accepted");
+    const inbox = await request(context.app).get("/api/candidates").expect(200);
+    expect(inbox.body.map(({ id }: { id: string }) => id)).toEqual(
+      ["candidate_knowledge_api"]
+    );
+    expect(inbox.body.map(({ id }: { id: string }) => id)).not.toContain(
+      "candidate_todo_api"
+    );
+    const todoDetail = await request(context.app)
+      .get("/api/documents/todo_candidate_todo_api")
       .expect(200);
-    expect(todoResponse.body).toMatchObject({
-      state: "accepted",
-      documentId: "todo_candidate_todo_api"
-    });
+    expect(todoDetail.body.provenanceSources).toEqual([
+      expect.objectContaining({
+        id: "lark:message:decision",
+        provider: "lark",
+        body: expect.stringContaining("需要确认发布计划"),
+        sender: {
+          person_id: personIdForIdentity("lark", "ou_sender"),
+          external_id: "ou_sender",
+          display_name: "发送者"
+        }
+      })
+    ]);
+    const inboxDetail = await request(context.app)
+      .get("/api/documents/candidate_knowledge_api")
+      .expect(200);
+    expect(inboxDetail.body.provenanceSources).toEqual([
+      expect.objectContaining({
+        id: "lark:message:decision",
+        body: expect.stringContaining("记录发布决策")
+      })
+    ]);
     expect(
       await context.runtime.store.exists(
         "todos/items/todo_candidate_todo_api.md"
@@ -424,25 +462,19 @@ describe("local API", () => {
         "knowledge/decisions/knowledge_candidate_knowledge_api.md"
       )
     ).toBe(true);
+    const knowledgeDetail = await request(context.app)
+      .get("/api/documents/knowledge_candidate_knowledge_api")
+      .expect(200);
+    expect(knowledgeDetail.body.provenanceSources).toEqual([
+      expect.objectContaining({
+        id: "lark:message:decision",
+        body: expect.stringContaining("记录发布决策")
+      })
+    ]);
     expect(
       context.runtime.index.byId("todo_candidate_todo_api")?.data.type
     ).toBe("todo");
 
-    await authorized(
-      request(context.app).post("/api/candidates/candidate_person_api/accept")
-    ).expect(200);
-    const afterPersonAcceptance = await request(context.app)
-      .get("/api/documents/person_candidate_target")
-      .expect(200);
-    expect(afterPersonAcceptance.body.pendingInsights).toEqual([]);
-    expect(afterPersonAcceptance.body.acceptedInsights).toEqual([
-      expect.objectContaining({
-        id: "person_insight_candidate_person_api",
-        observations: [
-          expect.objectContaining({ text: "评审前会汇总阻塞" })
-        ]
-      })
-    ]);
   });
 
   it("resolves concrete provenance messages for People", async () => {
@@ -478,8 +510,14 @@ describe("local API", () => {
       managed: "hybrid",
       created_at: timestamp,
       updated_at: timestamp,
-      source_refs: [source.id, newerSource.id],
-      identities: [],
+      source_refs: [],
+      identities: [
+        {
+          provider: "lark",
+          external_id: "ou_alice",
+          display_name: "Alice"
+        }
+      ],
       role: null,
       role_origin: null,
       is_leader: false,
@@ -493,7 +531,8 @@ describe("local API", () => {
         "p2p",
         source.occurred_at,
         "# 发布讨论\n\nAlice 会在评审前汇总阻塞项",
-        source.title
+        source.title,
+        [{ provider_id: "ou_alice", name: "Alice", role: "sender" }]
       )
     );
     context.runtime.machineContext.upsertSource(
@@ -502,7 +541,8 @@ describe("local API", () => {
         "p2p",
         newerSource.occurred_at,
         "# 后续讨论\n\nAlice 确认了新的排期",
-        newerSource.title
+        newerSource.title,
+        [{ provider_id: "ou_alice", name: "Alice", role: "sender" }]
       )
     );
     await context.runtime.store.write("people/person_api.md", person, "# Alice");
@@ -530,7 +570,11 @@ describe("local API", () => {
       expect.objectContaining({
         id: newerSource.id,
         title: "后续讨论",
-        body: expect.stringContaining("新的排期")
+        body: expect.stringContaining("新的排期"),
+        sender: expect.objectContaining({
+          person_id: personIdForIdentity("lark", "ou_alice"),
+          display_name: "Alice"
+        })
       })
     ]);
 
@@ -673,6 +717,34 @@ describe("local API", () => {
       .expect(400);
   });
 
+  it("updates the LLM Worker pool concurrency without changing analysis config", async () => {
+    const before = await request(context.app).get("/api/config").expect(200);
+    expect(before.body.analysis.worker_count).toBe(1);
+    expect(before.body.analysis.config).not.toHaveProperty("worker_count");
+
+    await authorized(
+      request(context.app).put("/api/config/analysis/workers")
+    )
+      .send({ worker_count: 3 })
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          worker_count: 3,
+          source: "workspace",
+          locked: false
+        });
+      });
+
+    expect(context.runtime.analysisWorker.workerCount).toBe(3);
+    const after = await request(context.app).get("/api/config").expect(200);
+    expect(after.body.analysis.worker_count).toBe(3);
+    await authorized(
+      request(context.app).put("/api/config/analysis/workers")
+    )
+      .send({ worker_count: 9 })
+      .expect(400);
+  });
+
   it("locks provider editing when an environment override is active", async () => {
     const locked = await createApp({
       workspaceRoot: root,
@@ -681,7 +753,10 @@ describe("local API", () => {
         new ApiAnalysisProvider("codex-sdk"),
         new ApiAnalysisProvider("codex-exec")
       ],
-      environment: { CONTEXT_SPACE_ANALYSIS_PROVIDER: "codex-exec" }
+      environment: {
+        CONTEXT_SPACE_ANALYSIS_PROVIDER: "codex-exec",
+        CONTEXT_SPACE_ANALYSIS_WORKERS: "4"
+      }
     });
     const config = await request(locked.app).get("/api/config").expect(200);
     const lockedToken = (
@@ -689,11 +764,20 @@ describe("local API", () => {
     ).body.token as string;
     expect(config.body.analysis.current_provider).toBe("codex-exec");
     expect(config.body.analysis.provider_locked).toBe(true);
+    expect(config.body.analysis.worker_count).toBe(4);
+    expect(config.body.analysis.worker_count_locked).toBe(true);
+    expect(locked.runtime.analysisWorker.workerCount).toBe(4);
     await authorized(
       request(locked.app).put("/api/config/analysis"),
       lockedToken
     )
       .send({ provider: "codex-sdk" })
+      .expect(409);
+    await authorized(
+      request(locked.app).put("/api/config/analysis/workers"),
+      lockedToken
+    )
+      .send({ worker_count: 2 })
       .expect(409);
     locked.runtime.sourceRetention.stop();
     await locked.runtime.analysisWorker.stop();

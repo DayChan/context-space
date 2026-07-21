@@ -548,8 +548,12 @@ export class LegacyWorkspaceMigration {
             data[key] === undefined ? [] : [[key, data[key]]]
           )
         );
-        if (imported.prompt_version === "context-analysis@1") {
-          imported.prompt_version = "context-analysis@2";
+        if (
+          imported.prompt_version === "context-analysis@1" ||
+          imported.prompt_version === "context-analysis@2" ||
+          imported.prompt_version === "context-analysis@3"
+        ) {
+          imported.prompt_version = "context-analysis@4";
         }
         this.settings.set("analysis_config", imported);
       }

@@ -75,7 +75,7 @@ describe("legacy workspace migration", () => {
       run_id: "analysis_run_legacy",
       item_key: "legacy_item",
       provider: "codex-sdk",
-      prompt_version: "context-analysis@2",
+      prompt_version: "context-analysis@4",
       schema_version: "work-context/analysis@2",
       analyzed_at: timestamp,
       evidence: ["旧消息正文"],
@@ -100,7 +100,7 @@ describe("legacy workspace migration", () => {
         status: "succeeded",
         provider: "codex-sdk",
         model: null,
-        prompt_version: "context-analysis@2",
+        prompt_version: "context-analysis@4",
         output_schema_version: "work-context/analysis@2",
         config_hash: "legacy-config",
         event_types: ["agent_message"],
@@ -207,7 +207,7 @@ describe("legacy workspace migration", () => {
     expect(settings.getSourceRetentionDays()).toBe(45);
     expect(
       settings.get<Record<string, unknown>>("analysis_config")
-    ).toMatchObject({ prompt_version: "context-analysis@2" });
+    ).toMatchObject({ prompt_version: "context-analysis@4" });
 
     const second = await migration.run();
     expect(second.counts.skipped).toBe(7);

@@ -37,7 +37,7 @@ const owedTodo: TodoMetadata = {
     run_id: "analysis_run_123",
     item_key: "item_123",
     provider: "codex-sdk",
-    prompt_version: "context-analysis@2",
+    prompt_version: "context-analysis@4",
     schema_version: "work-context/analysis@2",
     analyzed_at: "2026-07-20T01:00:00Z",
     evidence: ["准备发布计划"],
@@ -127,27 +127,41 @@ const personProvenanceSources = Array.from({ length: 11 }, (_, index) => {
   if (index === 0) {
     return {
       id: "lark:message:person_2",
+      provider: "lark",
       title: "Alice",
       body: "# Alice\n\n**Occurred:** 2026-07-20T02:00:00Z\n\nAlice 会在评审前汇总阻塞项",
       occurred_at: "2026-07-20T02:00:00Z",
-      source_kind: "p2p"
+      source_kind: "p2p",
+      sender: {
+        person_id: "person_sender_private",
+        external_id: "ou_private",
+        display_name: "私聊发送者"
+      }
     };
   }
   if (index === 1) {
     return {
       id: "lark:message:person_1",
+      provider: "lark",
       title: "发布评审群",
       body: "# 发布评审群\n\n**Occurred:** 2026-07-20T01:30:00Z\n\nAlice 负责发布流程",
       occurred_at: "2026-07-20T01:30:00Z",
-      source_kind: "mention"
+      source_kind: "mention",
+      sender: {
+        person_id: "person_sender_group",
+        external_id: "ou_group",
+        display_name: "群聊发送者"
+      }
     };
   }
   return {
     id: `lark:message:person_extra_${index}`,
+    provider: "lark",
     title: `历史讨论 ${index}`,
     body: `# 历史讨论 ${index}\n\n第 ${index} 条历史消息`,
     occurred_at: `2026-07-${String(20 - index).padStart(2, "0")}T00:00:00Z`,
-    source_kind: "p2p"
+    source_kind: "p2p",
+    sender: null
   };
 });
 
@@ -190,6 +204,7 @@ function jsonResponse(payload: unknown, status = 200): Promise<Response> {
 let selectedProvider = "codex-sdk";
 let selectedModel: string | null = null;
 let selectedReasoningEffort: AnalysisConfig["reasoning_effort"] = "medium";
+let selectedWorkerCount = 1;
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
 let owedTodoStatus: TodoMetadata["status"] = "open";
 let configuredLeaders: LeaderConfig[] = [];
@@ -205,6 +220,9 @@ function configResponse() {
       current_provider: selectedProvider,
       config_source: "workspace",
       provider_locked: false,
+      worker_count: selectedWorkerCount,
+      worker_count_source: "workspace",
+      worker_count_locked: false,
       config: {
         provider: selectedProvider,
         model: selectedModel,
@@ -214,7 +232,7 @@ function configResponse() {
         max_batch_records: 50,
         max_batch_source_chars: 60000,
         max_output_bytes: 2000000,
-        prompt_version: "context-analysis@2",
+        prompt_version: "context-analysis@4",
         retain_runs: 50,
         max_reanalysis_records: 50
       },
@@ -222,7 +240,7 @@ function configResponse() {
         { id: "codex-sdk", available: true, detail: "SDK 可用" },
         { id: "codex-exec", available: true, detail: "CLI 可用" }
       ],
-      prompt_version: "context-analysis@2",
+      prompt_version: "context-analysis@4",
       schema_version: "work-context/analysis@2",
       status: {
         schema: "work-context/analysis-status@1",
@@ -258,6 +276,7 @@ beforeEach(() => {
   selectedProvider = "codex-sdk";
   selectedModel = null;
   selectedReasoningEffort = "medium";
+  selectedWorkerCount = 1;
   larkStatus = EMPTY_SYNC_STATUS;
   owedTodoStatus = "open";
   configuredLeaders = [];
@@ -266,20 +285,19 @@ beforeEach(() => {
       id: "candidate_frontend",
       runId: "analysis_run_frontend",
       stableKey: "candidate-key",
-      kind: "todo",
+      kind: "knowledge",
       status: "proposed",
       title: "确认上线检查项",
       data: {
-        direction: "owed_by_me",
-        due_at: null,
-        explicit: true,
-        stakeholders: []
+        knowledge_kind: "playbook",
+        summary: "上线前需要检查关键项目。",
+        tags: ["release"]
       },
       sourceRefs: ["lark:message:frontend"],
       confidence: 0.9,
-      reason: "需要人工确认后进入 Todo。",
+      reason: "需要人工确认后进入知识库。",
       provider: "codex-sdk",
-      promptVersion: "context-analysis@2",
+      promptVersion: "context-analysis@4",
       analyzedAt: "2026-07-20T01:00:00Z",
       createdAt: "2026-07-20T01:00:00Z",
       reviewedAt: null,
@@ -316,6 +334,17 @@ beforeEach(() => {
           }
         });
       }
+      if (url === "/api/config/analysis/workers") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          worker_count: number;
+        };
+        selectedWorkerCount = body.worker_count;
+        return jsonResponse({
+          worker_count: selectedWorkerCount,
+          source: "workspace",
+          locked: false
+        });
+      }
       if (url === "/api/config/leaders") {
         configuredLeaders = JSON.parse(
           String(init?.body ?? "[]")
@@ -333,7 +362,7 @@ beforeEach(() => {
         return jsonResponse({
           candidateId: confirmed?.id,
           state: "accepted",
-          documentId: confirmed ? `todo_${confirmed.id}` : null
+          documentId: confirmed ? `knowledge_${confirmed.id}` : null
         });
       }
       if (url === "/api/sync/lark/status") return jsonResponse(larkStatus);
@@ -424,20 +453,113 @@ beforeEach(() => {
           path: "todos/owed.md",
           data: { ...owedTodo, status: owedTodoStatus },
           body: "# 准备发布计划\n\n来自群聊上下文。",
-          etag: "1"
+          etag: "1",
+          provenanceSources: [
+            {
+              id: "lark:message:om_1",
+              provider: "lark",
+              title: "发布计划讨论",
+              body: "# 发布计划讨论\n\n请在周五前准备发布计划",
+              occurred_at: "2026-07-20T01:00:00Z",
+              source_kind: "mention",
+              sender: {
+                person_id: "person_sender_todo",
+                external_id: "ou_todo_sender",
+                display_name: "Alice"
+              }
+            }
+          ],
+          provenancePagination: {
+            page: 1,
+            page_size: 10,
+            total: 1,
+            total_pages: 1
+          }
         });
       }
-      if (url.startsWith("/api/documents/todo_candidate_frontend")) {
+      if (url.startsWith("/api/documents/candidate_frontend")) {
         return jsonResponse({
-          path: "todos/items/todo_candidate_frontend.md",
+          path: ".context/machine/candidates/candidate_frontend",
           data: {
-            ...owedTodo,
-            id: "todo_candidate_frontend",
+            schema: "work-context/candidate@1",
+            id: "candidate_frontend",
+            type: "candidate",
             title: "确认上线检查项",
+            managed: "generated",
+            created_at: "2026-07-20T01:00:00Z",
+            updated_at: "2026-07-20T01:00:00Z",
+            source_refs: ["lark:message:frontend"],
+            status: "proposed",
+            confidence: 0.9,
+            candidate_kind: "knowledge"
+          },
+          body: "上线前确认检查项",
+          etag: "candidate-etag",
+          provenanceSources: [
+            {
+              id: "lark:message:frontend",
+              provider: "lark",
+              title: "上线讨论",
+              body: "上线前确认检查项",
+              occurred_at: "2026-07-20T01:00:00Z",
+              source_kind: "mention",
+              sender: {
+                person_id: "person_sender_frontend",
+                external_id: "ou_frontend_sender",
+                display_name: "Alice"
+              }
+            }
+          ],
+          provenancePagination: {
+            page: 1,
+            page_size: 10,
+            total: 1,
+            total_pages: 1
+          }
+        });
+      }
+      if (url.startsWith("/api/documents/knowledge_candidate_frontend")) {
+        return jsonResponse({
+          path: "knowledge/playbooks/knowledge_candidate_frontend.md",
+          data: {
+            schema: "work-context/knowledge@1",
+            type: "knowledge",
+            id: "knowledge_candidate_frontend",
+            title: "确认上线检查项",
+            managed: "manual",
+            created_at: "2026-07-20T01:00:00Z",
+            updated_at: "2026-07-20T01:00:00Z",
+            source_refs: ["lark:message:frontend"],
+            status: "curated",
+            knowledge_kind: "playbook",
+            curation_state: "curated",
+            superseded_by: null,
+            tags: ["release"],
             candidate_id: "candidate_frontend"
           },
           body: "# 确认上线检查项\n\n已确认依据",
-          etag: "accepted-etag"
+          etag: "accepted-etag",
+          provenanceSources: [
+            {
+              id: "lark:message:frontend",
+              provider: "lark",
+              title: "上线讨论",
+              body: "上线前确认检查项",
+              occurred_at: "2026-07-20T01:00:00Z",
+              source_kind: "mention",
+              sender: {
+                person_id: "person_sender_frontend",
+                external_id: "ou_frontend_sender",
+                display_name: "Alice"
+              }
+            }
+          ],
+          provenancePagination: {
+            page: 1,
+            page_size: 10,
+            total: 1,
+            total_pages: 1
+          }
         });
       }
       if (url.startsWith("/api/documents/person_alice")) {
@@ -528,19 +650,19 @@ describe("Context Space workbench", () => {
     expect(screen.getByText("等待 Alice 评审")).toBeInTheDocument();
   });
 
-  it("confirms an Inbox candidate and removes it from the review queue", async () => {
+  it("confirms an Inbox knowledge candidate and removes it from the review queue", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/inbox"]}><AppView /></MemoryRouter>);
     expect(await screen.findByText("确认上线检查项")).toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: "确认 确认上线检查项" })
-    );
-    await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining("/api/documents/todo_candidate_frontend"),
-        expect.anything()
-      );
+    const rejectButton = screen.getByRole("button", {
+      name: "拒绝 确认上线检查项"
     });
+    const acceptButton = screen.getByRole("button", {
+      name: "确认 确认上线检查项"
+    });
+    expect(rejectButton).toHaveClass("candidate-action");
+    expect(acceptButton).toHaveClass("candidate-action");
+    await user.click(acceptButton);
     expect(fetch).toHaveBeenCalledWith(
       "/api/candidates/candidate_frontend/accept",
       expect.objectContaining({
@@ -550,6 +672,19 @@ describe("Context Space workbench", () => {
         })
       })
     );
+    expect(await screen.findByText("Inbox 已清空")).toBeInTheDocument();
+    expect(screen.queryByText("确认上线检查项")).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining("/api/documents/knowledge_candidate_frontend"),
+      expect.anything()
+    );
+  });
+
+  it("shows source content on an Inbox candidate detail", async () => {
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/documents/candidate_frontend"]}><AppView /></MemoryRouter>);
+    expect(await screen.findByText("上线讨论")).toBeInTheDocument();
+    expect(screen.getAllByText("上线前确认检查项").length).toBeGreaterThan(0);
+    expect(screen.getByText("lark:message:frontend")).toBeInTheDocument();
   });
 
   it("marks a Todo complete from the list", async () => {
@@ -574,10 +709,15 @@ describe("Context Space workbench", () => {
   it("shows provenance and disabled automation on Todo detail", async () => {
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/documents/todo_owed"]}><AppView /></MemoryRouter>);
     expect(await screen.findByText("lark:message:om_1")).toBeInTheDocument();
+    expect(screen.getByText("发布计划讨论")).toBeInTheDocument();
+    expect(screen.getByText("请在周五前准备发布计划")).toBeInTheDocument();
+    expect(screen.getByText(/lark · mention/)).toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("ou_todo_sender")).toBeInTheDocument();
     expect(screen.getByText("外部执行不可用")).toBeInTheDocument();
     expect(screen.getByText("需要人工确认")).toBeInTheDocument();
     expect(screen.getByText("codex-sdk")).toBeInTheDocument();
-    expect(screen.getByText("context-analysis@2")).toBeInTheDocument();
+    expect(screen.getByText("context-analysis@4")).toBeInTheDocument();
   });
 
   it("shows categorized, evidence-backed person observations", async () => {
@@ -589,6 +729,8 @@ describe("Context Space workbench", () => {
     expect(screen.getAllByText("Alice 会在评审前汇总阻塞项").length).toBeGreaterThan(0);
     expect(screen.getByText(/86%/)).toBeInTheDocument();
     expect(screen.getAllByText("发布评审群").length).toBeGreaterThan(0);
+    expect(screen.getByText("私聊发送者")).toBeInTheDocument();
+    expect(screen.getByText("群聊发送者")).toBeInTheDocument();
     expect(screen.getAllByText("Alice 负责发布流程").length).toBeGreaterThan(0);
     expect(screen.getByText(/第 1 \/ 2 页/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "下一页 Provenance" }));
@@ -662,6 +804,22 @@ describe("Context Space workbench", () => {
       await screen.findByText("后续 Codex SDK 分析将使用 high 推理强度。")
     ).toBeInTheDocument();
     expect(selectedReasoningEffort).toBe("high");
+  });
+
+  it("configures parallel LLM Worker count", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+
+    const workerCount = await screen.findByLabelText("LLM Worker 数量");
+    expect(workerCount).toHaveValue(1);
+    await user.clear(workerCount);
+    await user.type(workerCount, "3");
+    await user.click(screen.getByRole("button", { name: "保存 Worker 数量" }));
+
+    expect(
+      await screen.findByText("LLM Worker 已调整为 3；新并发度立即生效。")
+    ).toBeInTheDocument();
+    expect(selectedWorkerCount).toBe(3);
   });
 
   it("searches, adds, lists, and removes Priority people", async () => {

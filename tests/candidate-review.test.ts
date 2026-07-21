@@ -83,6 +83,46 @@ describe("CandidateReviewService", () => {
               quote: "Please prepare the report"
             }
           ]
+        },
+        {
+          id: "candidate_knowledge_review",
+          stableKey: "knowledge",
+          kind: "knowledge",
+          title: "Reporting decision",
+          data: {
+            knowledge_kind: "decision",
+            summary: "Reports are reviewed weekly.",
+            tags: ["reporting"]
+          },
+          sourceRefs: [source.sourceId],
+          confidence: 0.9,
+          reason: "Durable decision",
+          evidence: [
+            {
+              sourceId: source.sourceId,
+              quote: "Please prepare the report"
+            }
+          ]
+        },
+        {
+          id: "candidate_person_review",
+          stableKey: "person",
+          kind: "person_insight",
+          title: "Owns reporting",
+          data: {
+            person_id: "person_alice",
+            category: "responsibility",
+            text: "Owns reporting"
+          },
+          sourceRefs: [source.sourceId],
+          confidence: 0.95,
+          reason: "Explicit responsibility",
+          evidence: [
+            {
+              sourceId: source.sourceId,
+              quote: "Please prepare the report"
+            }
+          ]
         }
       ]
     });
@@ -114,6 +154,41 @@ describe("CandidateReviewService", () => {
     expect(
       results.getCandidate("candidate_review")?.status
     ).toBe("accepted");
+  });
+
+  it("publishes Todo and workplace insights while leaving knowledge for review", async () => {
+    const published = await review.publishWithoutReview();
+    expect(published.failures).toEqual([]);
+    expect(published.operations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          candidateId: "candidate_review",
+          state: "accepted"
+        }),
+        expect.objectContaining({
+          candidateId: "candidate_person_review",
+          state: "accepted"
+        })
+      ])
+    );
+    expect(results.getCandidate("candidate_review")?.status).toBe("accepted");
+    expect(
+      results.getCandidate("candidate_knowledge_review")?.status
+    ).toBe("proposed");
+    expect(
+      results.getCandidate("candidate_person_review")?.status
+    ).toBe("accepted");
+    expect(
+      await store.exists(
+        "knowledge/decisions/knowledge_candidate_knowledge_review.md"
+      )
+    ).toBe(false);
+    expect(
+      await store.exists(
+        "people/person_insight_candidate_person_review.md"
+      )
+    ).toBe(true);
+    expect((await review.publishWithoutReview()).operations).toEqual([]);
   });
 
   it("recovers a pending operation when its deterministic file already exists", async () => {
