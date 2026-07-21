@@ -1,0 +1,46 @@
+.env.example
+  s_730dd22e3c1143::t_0d4309abcafd7e 14
+README.md
+  s_730dd22e3c1143::t_a74700f2babf26 68-70
+openspec/changes/separate-machine-and-human-context-storage/design.md
+  s_730dd22e3c1143::t_8a3f35e002dc49 66-67,127
+openspec/changes/separate-machine-and-human-context-storage/proposal.md
+  s_730dd22e3c1143::t_9a3cb81a91ff06 11
+openspec/changes/separate-machine-and-human-context-storage/specs/lark-context-sync/spec.md
+  s_730dd22e3c1143::t_fc05f39b1d4bf9 11,17-24
+openspec/changes/separate-machine-and-human-context-storage/tasks.md
+  s_730dd22e3c1143::t_5492bf573abf03 31
+openspec/changes/separate-machine-and-human-context-storage/verification-report.md
+  s_730dd22e3c1143::t_8357d9a407993d 7-8,48
+src/adapters/lark/sync.ts
+  s_730dd22e3c1143::t_3efd9da1c9503c 24-27,43,49-109,121-122,258-275,278,280-283,305,323-328,540,544-545,562
+src/core/workspace.ts
+  s_730dd22e3c1143::t_ad36ec01c29dda 62
+src/server/app.ts
+  s_730dd22e3c1143::t_65f29db962abae 30-33,597-598
+tests/lark.test.ts
+  s_730dd22e3c1143::t_3b35b700c16ddd 24-28,250-289,314-359,977,988,1010-1067
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7fd66aa9b3f7a97d5a0bc8df0697a21ce5690f46",
+  "prompts": {},
+  "humans": {
+    "h_969d39e0df1452": {
+      "author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_730dd22e3c1143": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7efa-81f7-7213-beca-f2211afe59cb",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
