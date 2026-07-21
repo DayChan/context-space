@@ -1,0 +1,48 @@
+README.md
+  s_62af5b86b6a8cc::t_0d4a5694a2072b 76,94,100,103
+src/analysis/config.ts
+  s_62af5b86b6a8cc::t_87996b6edd5c5a 4-8,14,29,120-125
+src/analysis/contracts.ts
+  s_62af5b86b6a8cc::t_38ddb06bc7b034 6-14,48,73
+src/analysis/coordinator.ts
+  s_62af5b86b6a8cc::t_f18c0eb0c91e3a 364,459
+src/analysis/persistent-processor.ts
+  s_62af5b86b6a8cc::t_b844e9ebc9d7a8 14,62-65,236
+src/analysis/providers/codex-sdk.ts
+  s_62af5b86b6a8cc::t_3f85aaaa68e421 102
+src/core/workspace.ts
+  s_62af5b86b6a8cc::t_55d267f620c34e 71,183-185,202-203
+src/machine/legacy-migration.ts
+  s_62af5b86b6a8cc::t_2447fb1d8c2a87 536
+src/web/App.tsx
+  s_62af5b86b6a8cc::t_9cac215d60bfd9 60,1098,1154,1278-1296,1433-1456,1493-1495
+tests/analysis.test.ts
+  s_62af5b86b6a8cc::t_d054a9a6225dfe 67,365,665,674
+tests/api.test.ts
+  s_62af5b86b6a8cc::t_3a6b881bba9291 649-653,658,661-670
+tests/frontend.test.tsx
+  s_62af5b86b6a8cc::t_7cdc0a22b0408b 15,192,211,260,306,310,312-316,647-664
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "54ff0c49e9640fd6fe4d24f9d019fab70f4ad5a2",
+  "prompts": {},
+  "humans": {
+    "h_969d39e0df1452": {
+      "author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_62af5b86b6a8cc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f803c-e122-7fa3-aeca-d3e318a65e17",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
