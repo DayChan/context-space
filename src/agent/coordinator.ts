@@ -74,7 +74,10 @@ export class AgentCoordinator {
           this.logger.info("agent.turn.completed", { session_id: sessionId, turn_id: turn.id, outcome: result.outcome });
         } catch (error) {
           const cancelled = controller.signal.aborted;
-          const messageText = error instanceof Error ? error.message : String(error);
+          const rawMessage = error instanceof Error ? error.message : String(error);
+          const messageText = rawMessage.length <= 16_000
+            ? rawMessage
+            : `${rawMessage.slice(0, 16_000)}\n…[truncated]`;
           this.store.failTurn(turn.id, messageText, cancelled ? "cancelled" : "failed");
           this.logger.warn("agent.turn.failed", { session_id: sessionId, turn_id: turn.id, cancelled, error });
         } finally {

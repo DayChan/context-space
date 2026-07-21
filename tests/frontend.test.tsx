@@ -1064,6 +1064,46 @@ describe("Context Space workbench", () => {
     expect(screen.getByText("仅 Git 仓库支持独立 worktree")).toBeInTheDocument();
   });
 
+  it("shows failed Agent turns instead of appearing unresponsive", async () => {
+    const repository: AgentRepository = {
+      id: "repo_failed",
+      name: "context-space",
+      path: "/workspace/context-space",
+      kind: "git",
+      headCommit: "1234567890abcdef",
+      branch: "main",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:00Z"
+    };
+    agentSessions = [{
+      id: "session_failed",
+      title: "失败任务",
+      sourceKind: "todo",
+      sourceId: "todo_owed",
+      repositoryId: repository.id,
+      repository,
+      mode: "read_only",
+      workspacePath: repository.path,
+      branch: null,
+      baseCommit: repository.headCommit,
+      threadId: "thread_failed",
+      status: "active",
+      attention: "reply_required",
+      workspaceLifecycle: "ready",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:01:00Z",
+      endedAt: null,
+      messages: [{ id: "message_failed", sessionId: "session_failed", turnId: "turn_failed", role: "user", content: "执行任务", createdAt: "2026-07-21T00:00:00Z" }],
+      turns: [{ id: "turn_failed", sessionId: "session_failed", inputMessageId: "message_failed", status: "failed", outcome: null, usage: null, error: "Structured output schema rejected", createdAt: "2026-07-21T00:00:00Z", startedAt: "2026-07-21T00:00:01Z", completedAt: "2026-07-21T00:01:00Z" }],
+      events: [],
+      confirmations: []
+    }];
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/loop?session=session_failed"]}><AppView /></MemoryRouter>);
+    expect(await screen.findByText("Agent Turn 执行失败")).toBeInTheDocument();
+    expect(screen.getByText("Structured output schema rejected")).toBeInTheDocument();
+    expect(screen.getByText(/会话与工作区已保留/)).toBeInTheDocument();
+  });
+
   it("registers and removes an Agent repository in Settings", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);

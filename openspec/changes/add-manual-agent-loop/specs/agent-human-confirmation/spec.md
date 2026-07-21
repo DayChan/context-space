@@ -3,6 +3,8 @@
 ### Requirement: 结构化人工确认
 每个 Agent Turn SHALL 返回结构化 outcome；当 outcome 为 `needs_confirmation` 时，系统 MUST 持久化包含类型、问题、选项和来源 Turn 的 Confirmation Request，不得通过自然语言猜测确认状态。
 
+传给 Codex Structured Outputs 的顶层字段 MUST 全部为 required；`confirmation` SHALL 通过对象或 `null` 的联合类型表达业务可选性。非 `needs_confirmation` 结果 MUST 返回 `confirmation: null`。
+
 #### Scenario: Agent 请求方案选择
 - **WHEN** Agent 返回合法的 `needs_confirmation` 结果和两个可选方案
 - **THEN** 系统创建 `decision` 确认、将会话归入人工确认并展示问题与选项

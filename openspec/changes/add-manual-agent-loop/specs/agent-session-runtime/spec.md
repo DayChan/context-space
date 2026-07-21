@@ -46,3 +46,10 @@
 #### Scenario: Agent 执行命令
 - **WHEN** Runtime 发出命令开始、更新或完成事件
 - **THEN** 系统保存有界事件投影并通知已连接的 Loop 客户端刷新对应会话
+
+### Requirement: 可诊断的 Turn 失败
+系统 SHALL 持久化失败、中断或取消 Turn 的有界错误，并在 Loop 对话区展示状态、错误与工作区保留提示；失败 MUST NOT 表现为无响应，也不得自动重跑可能已产生副作用的原始 Prompt。
+
+#### Scenario: Codex 请求失败
+- **WHEN** Runtime 在生成有效结构化终态前失败
+- **THEN** Turn 被标记为失败，Loop 展示错误并允许用户在保留的会话和工作区上继续对话
