@@ -1,0 +1,45 @@
+README.md
+  s_aa2817e42ba2bf::t_af63f27c216379 18,105,107,110-111
+openspec/changes/add-manual-agent-loop/design.md
+  s_aa2817e42ba2bf::t_afb13f4136822c 34,39,41-43,51
+openspec/changes/add-manual-agent-loop/proposal.md
+  s_aa2817e42ba2bf::t_ffc2f5ef1bfb31 8-9
+openspec/changes/add-manual-agent-loop/specs/agent-workspace-management/spec.md
+  s_aa2817e42ba2bf::t_c3647313248932 3-4,12-16,19,36-39
+openspec/changes/add-manual-agent-loop/specs/context-workbench-ui/spec.md
+  s_aa2817e42ba2bf::t_77f3a6b65e1542 29,34-37
+src/agent/git-workspace.ts
+  s_aa2817e42ba2bf::t_dc0d8fca7bf9ba 2-3,37-38,43-54,56-58,61-69,73,77-79
+src/agent/service.ts
+  s_aa2817e42ba2bf::t_ab095c4b51db1d 16,20,28-29,31-33,83-85,113,133
+src/core/types.ts
+  s_aa2817e42ba2bf::t_57383cb7ce90aa 340-341,407
+src/machine/agent-repository.ts
+  s_aa2817e42ba2bf::t_7030310aa8372d 19,55,58-63,66-68,82-86,88-90,98,105,118,363-364
+src/machine/migrations.ts
+  s_aa2817e42ba2bf::t_50d39365511250 401-409
+src/web/App.tsx
+  s_aa2817e42ba2bf::t_84c02e42c88256 520-521,549-555,558,561-562,1279,1843,1854,1865,1867-1868,1871-1872,1874
+tests/agent-loop.test.ts
+  s_aa2817e42ba2bf::t_80428206835d6e 2,97,102,105,107,111-150,158,208,253,284-285,308-318
+tests/frontend.test.tsx
+  s_aa2817e42ba2bf::t_6954864ca0e1a4 434,439-441,1030,1048-1066,1070-1072,1074-1075
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "58cca09ee413e5cd431c63338ee7442f572622b5",
+  "prompts": {},
+  "sessions": {
+    "s_aa2817e42ba2bf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f83e0-7301-7ee0-9363-b643ac673cf7",
+        "model": "unknown"
+      },
+      "human_author": "Duoru Chen <chenduoru@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
