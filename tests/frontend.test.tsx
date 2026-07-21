@@ -12,7 +12,13 @@ import type {
   SyncStatus,
   TodoMetadata
 } from "../src/core/types";
-import { DEFAULT_AUTOMATION, EMPTY_SYNC_STATUS } from "../src/core/types";
+import {
+  DEFAULT_AUTOMATION,
+  EMPTY_MEEGO_SYNC_STATUS,
+  EMPTY_SYNC_STATUS,
+  type MeegoConfig,
+  type MeegoSyncStatus
+} from "../src/core/types";
 import type { AnalysisConfig } from "../src/analysis/contracts";
 import type { StoredCandidate } from "../src/machine";
 import { AppView } from "../src/web/App";
@@ -226,6 +232,12 @@ let selectedSyncSchedule = {
   unit: "hours" as "minutes" | "hours"
 };
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
+let meegoConfig: MeegoConfig = {
+  enabled: false,
+  qTagTimelineEnabled: false,
+  projectKeys: []
+};
+let meegoStatus: MeegoSyncStatus = EMPTY_MEEGO_SYNC_STATUS;
 let owedTodoStatus: TodoMetadata["status"] = "open";
 let configuredLeaders: LeaderConfig[] = [];
 let inboxCandidates: Array<StoredCandidate & { acceptance: null }> = [];
@@ -242,6 +254,11 @@ function configResponse() {
         running: true,
         next_run_at: null
       }
+    },
+    meego: {
+      config: meegoConfig,
+      status: meegoStatus,
+      readOnly: true
     },
     loop: { enabled: false, executionEndpoint: null },
     retention: { source_body_days: 90 },
@@ -308,6 +325,12 @@ beforeEach(() => {
   selectedWorkerCount = 1;
   selectedSyncSchedule = { enabled: false, interval: 1, unit: "hours" };
   larkStatus = EMPTY_SYNC_STATUS;
+  meegoConfig = {
+    enabled: false,
+    qTagTimelineEnabled: false,
+    projectKeys: []
+  };
+  meegoStatus = EMPTY_MEEGO_SYNC_STATUS;
   owedTodoStatus = "open";
   configuredLeaders = [];
   inboxCandidates = [
@@ -391,6 +414,14 @@ beforeEach(() => {
           next_run_at: null
         });
       }
+      if (url === "/api/config/meego") {
+        meegoConfig = JSON.parse(String(init?.body ?? "{}")) as MeegoConfig;
+        return jsonResponse({
+          config: meegoConfig,
+          status: { ...meegoStatus, enabled: meegoConfig.enabled },
+          readOnly: true
+        });
+      }
       if (url.startsWith("/api/candidates/") && url.endsWith("/accept")) {
         const id = decodeURIComponent(url.split("/")[3]);
         const confirmed = inboxCandidates.find(
@@ -407,6 +438,58 @@ beforeEach(() => {
       }
       if (url === "/api/sync/lark/status") return jsonResponse(larkStatus);
       if (url === "/api/sync/lark") return jsonResponse(larkStatus);
+      if (url === "/api/sync/meego/status") {
+        return jsonResponse({ ...meegoStatus, enabled: meegoConfig.enabled });
+      }
+      if (url === "/api/sync/meego") {
+        meegoStatus = {
+          enabled: meegoConfig.enabled,
+          running: false,
+          startedAt: "2026-07-21T01:00:00Z",
+          completedAt: "2026-07-21T01:01:00Z",
+          results: [],
+          lastError: null
+        };
+        return jsonResponse(meegoStatus);
+      }
+      if (url === "/api/meego") {
+        const qItem = {
+          id: "meegle:project_1:story:101",
+          title: "Q 标签需求",
+          projectKey: "project_1",
+          projectName: "Demo Project",
+          workItemType: "story",
+          workItemTypeName: "需求",
+          workItemId: "101",
+          updatedAt: "2026-07-20T01:00:00Z",
+          tags: ["Q30828"],
+          qTags: [{
+            raw: "Q30828",
+            quarter: 3,
+            month: 8,
+            day: 28,
+            sortKey: 30828
+          }],
+          primaryQTag: {
+            raw: "Q30828",
+            quarter: 3,
+            month: 8,
+            day: 28,
+            sortKey: 30828
+          },
+          completed: false,
+          url: "https://project.feishu.cn/demo/story/detail/101"
+        };
+        return jsonResponse(
+          meegoConfig.qTagTimelineEnabled
+            ? {
+                mode: "q_tag_time",
+                items: [qItem],
+                groups: [{ qTag: qItem.primaryQTag, items: [qItem] }]
+              }
+            : { mode: "updated_at", items: [qItem], groups: [] }
+        );
+      }
       if (url === "/api/todos/todo_owed/status") {
         const body = JSON.parse(String(init?.body ?? "{}")) as {
           status: TodoMetadata["status"];
@@ -641,7 +724,7 @@ describe("Context Space workbench", () => {
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/"]}><AppView /></MemoryRouter>);
     expect(await screen.findByText("准备发布计划")).toBeInTheDocument();
     expect(screen.getByText("Leader 相关交付")).toBeInTheDocument();
-    for (const label of ["Now", "Inbox", "Todos", "People", "Knowledge", "Timeline", "Loop", "Settings"]) {
+    for (const label of ["Now", "Inbox", "Todos", "People", "Knowledge", "Timeline", "Meego", "Loop", "Settings"]) {
       expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
@@ -804,6 +887,58 @@ describe("Context Space workbench", () => {
     expect(await screen.findByText("正在读取 p2p 第 2/3 个窗口，第 5 页")).toBeInTheDocument();
     expect(screen.getByText("P2P 消息")).toBeInTheDocument();
     expect(screen.getByText("125 / 80")).toBeInTheDocument();
+  });
+
+  it("configures Meego collection and Q tag filtering in Settings", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/settings"]}><AppView /></MemoryRouter>);
+
+    const enabled = await screen.findByLabelText("开启 Meego 抓取");
+    const qTags = screen.getByLabelText("按 Q 标签过滤并排序");
+    await user.click(enabled);
+    await user.click(qTags);
+    await user.type(screen.getByLabelText("Meego Project keys"), "project_1\nproject_2");
+    await user.click(screen.getByRole("button", { name: "保存 Meego 配置" }));
+
+    expect(await screen.findByText("Meego 配置已保存。开关只影响后续抓取和页面过滤，不会删除已有数据。")).toBeInTheDocument();
+    expect(meegoConfig).toEqual({
+      enabled: true,
+      qTagTimelineEnabled: true,
+      projectKeys: ["project_1", "project_2"]
+    });
+  });
+
+  it("renders participating Meego items in Q tag groups", async () => {
+    meegoConfig = {
+      enabled: true,
+      qTagTimelineEnabled: true,
+      projectKeys: ["project_1"]
+    };
+    meegoStatus = {
+      ...EMPTY_MEEGO_SYNC_STATUS,
+      enabled: true,
+      results: [{
+        projectKey: "project_1",
+        workItemType: "sub_task",
+        ok: true,
+        skipped: true,
+        received: 0,
+        persisted: 0,
+        message: "Q 标签模式要求工作项类型提供 tags 字段"
+      }]
+    };
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/meego"]}><AppView /></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "我参与的 Meego" })).toBeInTheDocument();
+    expect(screen.getByText("Q 标签需求")).toBeInTheDocument();
+    expect(screen.getAllByText("Q30828").length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: "Q30828" })).toBeInTheDocument();
+    expect(screen.queryByText("已跳过")).not.toBeInTheDocument();
+    expect(screen.queryByText("Q 标签模式要求工作项类型提供 tags 字段")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Q 标签需求/ })).toHaveAttribute(
+      "href",
+      "https://project.feishu.cn/demo/story/detail/101"
+    );
   });
 
   it("keeps Loop visible and explicitly inert", async () => {

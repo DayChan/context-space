@@ -35,7 +35,15 @@ import {
   LarkSyncScheduleConfigService,
   PeriodicLarkSyncScheduler
 } from "../adapters/lark/scheduler";
+import {
+  MeegoAdapter,
+  MeegoConfigService,
+  MeegleCliCommandRunner,
+  MeegoSyncService,
+  type MeegleCommandRunner
+} from "../adapters/meego";
 import { ContextIndex } from "../core/index";
+import { buildMeegoList } from "../core/meego";
 import { MarkdownIndexSync } from "../core/markdown-index-sync";
 import {
   DocumentConflictError,
@@ -183,6 +191,8 @@ export interface Runtime {
   machineContext: MachineContextRepository;
   sync: LarkSyncService;
   syncScheduler: PeriodicLarkSyncScheduler;
+  meegoSync: MeegoSyncService;
+  meegoConfig: MeegoConfigService;
   analysisJobs: AnalysisJobRepository;
   analysisResults: AnalysisResultRepository;
   markdownIndexRepository: MarkdownIndexRepository;
@@ -202,6 +212,7 @@ export interface Runtime {
 export interface CreateAppOptions {
   workspaceRoot: string;
   commandRunner?: CommandRunner;
+  meegleCommandRunner?: MeegleCommandRunner;
   analysisProviders?: AnalysisProvider[];
   environment?: NodeJS.ProcessEnv;
   staticRoot?: string;
@@ -507,6 +518,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
   }
   const analysisConfig = new AnalysisConfigService(settings, environment);
   const syncScheduleConfig = new LarkSyncScheduleConfigService(settings);
+  const meegoConfig = new MeegoConfigService(settings);
   const analysisWorkerConfig = new AnalysisWorkerConfigService(
     settings,
     environment
@@ -603,6 +615,15 @@ export async function createApp(options: CreateAppOptions): Promise<{
     syncScheduleConfig,
     logger
   );
+  const meegleRunner =
+    options.meegleCommandRunner ??
+    new MeegleCliCommandRunner("meegle", logger);
+  const meegoSync = new MeegoSyncService(
+    machineContext,
+    meegoConfig,
+    new MeegoAdapter(meegleRunner),
+    logger
+  );
 
   const runtime: Runtime = {
     store,
@@ -611,6 +632,8 @@ export async function createApp(options: CreateAppOptions): Promise<{
     machineContext,
     sync,
     syncScheduler,
+    meegoSync,
+    meegoConfig,
     analysisJobs,
     analysisResults,
     markdownIndexRepository,
@@ -876,6 +899,11 @@ export async function createApp(options: CreateAppOptions): Promise<{
         identity: "user",
         schedule: syncScheduler.status()
       },
+      meego: {
+        config: meegoConfig.get(),
+        status: meegoSync.getStatus(),
+        readOnly: true
+      },
       loop: {
         enabled: false,
         executionEndpoint: null
@@ -906,6 +934,11 @@ export async function createApp(options: CreateAppOptions): Promise<{
     const leaders = leadersSchema.parse(request.body);
     settings.set("leaders", leaders);
     response.json({ leaders });
+  });
+
+  app.put("/api/config/meego", (request, response) => {
+    const config = meegoConfig.update(request.body);
+    response.json({ config, status: meegoSync.getStatus(), readOnly: true });
   });
 
   app.put("/api/config/analysis", async (request, response) => {
@@ -1153,6 +1186,27 @@ export async function createApp(options: CreateAppOptions): Promise<{
 
   app.get("/api/sync/lark/status", (_request, response) => {
     response.json(sync.getStatus());
+  });
+
+  app.get("/api/meego", (_request, response) => {
+    response.json(
+      buildMeegoList(
+        machineContext.listSources({ kinds: ["meego"] }),
+        meegoConfig.get()
+      )
+    );
+  });
+
+  app.post("/api/sync/meego", async (_request, response, next) => {
+    try {
+      response.json(await meegoSync.sync());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/sync/meego/status", (_request, response) => {
+    response.json(meegoSync.getStatus());
   });
 
   app.get("/api/loop", async (_request, response) => {

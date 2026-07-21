@@ -155,6 +155,63 @@ describe("local API", () => {
       .expect(404);
   });
 
+  it("persists Meego switches and serves the configured list mode", async () => {
+    const initialConfig = await request(context.app).get("/api/config").expect(200);
+    expect(initialConfig.body.meego).toMatchObject({
+      config: {
+        enabled: false,
+        qTagTimelineEnabled: false,
+        projectKeys: []
+      },
+      readOnly: true
+    });
+    await authorized(request(context.app).post("/api/sync/meego"))
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.enabled).toBe(false);
+      });
+
+    const saved = await authorized(
+      request(context.app).put("/api/config/meego")
+    )
+      .send({
+        enabled: true,
+        qTagTimelineEnabled: true,
+        projectKeys: ["project_1", "project_1"]
+      })
+      .expect(200);
+    expect(saved.body.config).toEqual({
+      enabled: true,
+      qTagTimelineEnabled: true,
+      projectKeys: ["project_1"]
+    });
+
+    context.runtime.machineContext.upsertSource({
+      sourceId: "meegle:project_1:story:101",
+      provider: "meegle",
+      kind: "meego",
+      title: "Q 标签需求",
+      text: "Q 标签需求",
+      occurredAt: "2026-07-20T01:00:00Z",
+      participants: [],
+      metadata: {
+        project_key: "project_1",
+        project_name: "Demo",
+        work_item_type: "story",
+        work_item_type_name: "需求",
+        work_item_id: "101",
+        tags: ["Q30828"],
+        updated_at: "2026-07-20T01:00:00Z"
+      }
+    });
+    const list = await request(context.app).get("/api/meego").expect(200);
+    expect(list.body).toMatchObject({
+      mode: "q_tag_time",
+      items: [{ id: "meegle:project_1:story:101" }],
+      groups: [{ qTag: { raw: "Q30828" } }]
+    });
+  });
+
   it("shows only calendar sources in Timeline", async () => {
     context.runtime.machineContext.upsertSource(
       machineSource(

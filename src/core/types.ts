@@ -124,7 +124,15 @@ export interface KnowledgeMetadata extends BaseMetadata {
   tags: string[];
 }
 
-export type SourceKind = "mention" | "p2p" | "calendar" | "task" | "person";
+export type SourceProvider = "lark" | "meegle";
+
+export type SourceKind =
+  | "mention"
+  | "p2p"
+  | "calendar"
+  | "task"
+  | "person"
+  | "meego";
 
 export interface SourceParticipant {
   provider_id: string;
@@ -134,7 +142,7 @@ export interface SourceParticipant {
 
 export interface NormalizedSourceRecord {
   sourceId: string;
-  provider: "lark";
+  provider: SourceProvider;
   kind: SourceKind;
   title: string;
   text: string;
@@ -145,7 +153,7 @@ export interface NormalizedSourceRecord {
 
 export interface SourceMetadata extends BaseMetadata {
   type: "source";
-  provider: "lark";
+  provider: SourceProvider;
   source_kind: SourceKind;
   source_id: string;
   occurred_at: string;
@@ -242,6 +250,77 @@ export interface SyncProgress {
   message: string;
   updated_at: string;
 }
+
+export interface MeegoConfig {
+  enabled: boolean;
+  qTagTimelineEnabled: boolean;
+  projectKeys: string[];
+}
+
+export interface ParsedQTag {
+  raw: string;
+  quarter: number;
+  month: number;
+  day: number;
+  sortKey: number;
+}
+
+export interface MeegoItem {
+  id: string;
+  title: string;
+  projectKey: string;
+  projectName: string;
+  workItemType: string;
+  workItemTypeName: string;
+  workItemId: string;
+  updatedAt: string;
+  tags: string[];
+  qTags: ParsedQTag[];
+  primaryQTag: ParsedQTag | null;
+  completed: boolean;
+  url: string | null;
+}
+
+export interface MeegoGroup {
+  qTag: ParsedQTag;
+  items: MeegoItem[];
+}
+
+export interface MeegoList {
+  mode: "q_tag_time" | "updated_at";
+  items: MeegoItem[];
+  groups: MeegoGroup[];
+}
+
+export interface MeegoSyncResult {
+  projectKey: string;
+  workItemType: string | null;
+  ok: boolean;
+  skipped?: boolean;
+  received: number;
+  persisted: number;
+  message?: string;
+  error?: string;
+  completedAt?: string;
+}
+
+export interface MeegoSyncStatus {
+  enabled: boolean;
+  running: boolean;
+  startedAt: string | null;
+  completedAt: string | null;
+  results: MeegoSyncResult[];
+  lastError: string | null;
+}
+
+export const EMPTY_MEEGO_SYNC_STATUS: MeegoSyncStatus = {
+  enabled: false,
+  running: false,
+  startedAt: null,
+  completedAt: null,
+  results: [],
+  lastError: null
+};
 
 export interface LoopReadiness {
   futureAutomatable: TodoMetadata[];

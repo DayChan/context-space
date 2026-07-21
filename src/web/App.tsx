@@ -42,6 +42,10 @@ import type {
   KnowledgeMetadata,
   LeaderConfig,
   LoopReadiness,
+  MeegoConfig,
+  MeegoItem,
+  MeegoList,
+  MeegoSyncStatus,
   Overview,
   PersonInsightCategory,
   PersonMetadata,
@@ -51,6 +55,7 @@ import type {
   TodoMetadata,
   WorkspaceDocument
 } from "../core/types";
+import { EMPTY_MEEGO_SYNC_STATUS } from "../core/types";
 import type {
   AnalysisConfig,
   AnalysisRunMetadata,
@@ -158,6 +163,7 @@ const navigation = [
   { to: "/people", label: "People", icon: Users },
   { to: "/knowledge", label: "Knowledge", icon: BookOpen },
   { to: "/timeline", label: "Timeline", icon: Activity },
+  { to: "/meego", label: "Meego", icon: ListTodo },
   { to: "/loop", label: "Loop", icon: Bot },
   { to: "/settings", label: "Settings", icon: Settings }
 ] as const;
@@ -564,6 +570,33 @@ function SourceRow({ source }: { source: SourceMetadata }) {
       </div>
       <ArrowUpRight size={15} />
     </Link>
+  );
+}
+
+function MeegoItemRow({ item }: { item: MeegoItem }) {
+  const content = (
+    <>
+      <span className="source-icon"><ListTodo size={17} /></span>
+      <div>
+        <strong>{item.title}</strong>
+        <span>
+          {item.projectName} · {item.workItemTypeName} · 更新于 {formatDate(item.updatedAt)}
+        </span>
+        {item.qTags.length > 0 && (
+          <span className="meego-tags">
+            {item.qTags.map((tag) => <Badge key={tag.raw} tone="blue">{tag.raw}</Badge>)}
+          </span>
+        )}
+      </div>
+      <ArrowUpRight size={15} />
+    </>
+  );
+  return item.url ? (
+    <a className="source-row meego-row" href={item.url} rel="noreferrer" target="_blank">
+      {content}
+    </a>
+  ) : (
+    <div className="source-row meego-row">{content}</div>
   );
 }
 
@@ -1082,6 +1115,126 @@ function LoopPage() {
   );
 }
 
+function MeegoPage() {
+  const list = useApi<MeegoList>("/api/meego", {
+    mode: "updated_at",
+    items: [],
+    groups: []
+  });
+  const status = useApi<MeegoSyncStatus>(
+    "/api/sync/meego/status",
+    EMPTY_MEEGO_SYNC_STATUS
+  );
+  const [syncing, setSyncing] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function syncMeego() {
+    setSyncing(true);
+    setMessage("");
+    try {
+      const result = await api<MeegoSyncStatus>("/api/sync/meego", {
+        method: "POST"
+      });
+      setMessage(
+        result.lastError
+          ? `同步完成，但存在问题：${result.lastError}`
+          : result.enabled
+            ? "Meego 只读同步完成。"
+            : "Meego 抓取当前已关闭，请先在 Settings 开启。"
+      );
+      await Promise.all([list.reload(), status.reload()]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  const failed = status.data.results.filter((result) => !result.ok);
+  return (
+    <>
+      <PageHeader
+        eyebrow="Meego · Read only"
+        title="我参与的 Meego"
+        description={
+          list.data.mode === "q_tag_time"
+            ? "仅展示未完成且带合法 Q 时间标签的参与项，按完整标签分组。"
+            : "展示配置空间内全部未完成参与项，按更新时间从新到旧排列。"
+        }
+        action={
+          <button
+            className="primary-button"
+            disabled={!status.data.enabled || syncing || status.data.running}
+            onClick={() => void syncMeego()}
+            type="button"
+          >
+            <RefreshCw className={syncing || status.data.running ? "spin" : ""} size={17} />
+            {syncing || status.data.running ? "正在同步…" : "同步 Meego"}
+          </button>
+        }
+      />
+      <ErrorBanner message={list.error ?? status.error} />
+      {message && <div className="info-banner">{message}</div>}
+      {!status.data.enabled && (
+        <div className="info-banner">
+          Meego 抓取已关闭。请在 <Link className="text-link" to="/settings">Settings</Link> 配置项目并开启。
+        </div>
+      )}
+      {failed.length > 0 && (
+        <div className="lark-issue-list">
+          {failed.map((result) => (
+            <div className="lark-issue" key={`${result.projectKey}:${result.workItemType ?? "project"}`}>
+              <div className="lark-issue-head">
+                <AlertTriangle size={16} />
+                <div>
+                  <strong>{result.projectKey} · {result.workItemType ?? "项目"}</strong>
+                  <span>{result.error ?? "同步失败"}</span>
+                </div>
+                <Badge tone="coral">失败</Badge>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {list.data.mode === "q_tag_time" ? (
+        list.data.groups.length ? (
+          <div className="meego-groups">
+            {list.data.groups.map((group) => (
+              <Section
+                key={group.qTag.raw}
+                title={group.qTag.raw}
+                subtitle={`${group.items.length} 个未完成参与项`}
+              >
+                {group.items.map((item) => <MeegoItemRow item={item} key={item.id} />)}
+              </Section>
+            ))}
+          </div>
+        ) : (
+          <Section title="Q 标签时间线" subtitle="当前过滤模式">
+            <EmptyState
+              icon={ListTodo}
+              title={list.loading ? "正在加载…" : "没有匹配的 Meego"}
+              description="同步后，仅包含合法 Q 时间标签的参与项会显示在这里。"
+            />
+          </Section>
+        )
+      ) : (
+        <Section title="最近更新" subtitle={`${list.data.items.length} 个参与项`}>
+          {list.data.items.length ? (
+            list.data.items.map((item) => <MeegoItemRow item={item} key={item.id} />)
+          ) : (
+            <EmptyState
+              icon={ListTodo}
+              title={list.loading ? "正在加载…" : "尚未同步 Meego"}
+              description="配置项目空间并执行只读同步后，参与项会显示在这里。"
+            />
+          )}
+        </Section>
+      )}
+    </>
+  );
+}
+
 interface ConfigResponse {
   leaders: LeaderConfig[];
   lark: {
@@ -1097,6 +1250,11 @@ interface ConfigResponse {
       running: boolean;
       next_run_at: string | null;
     };
+  };
+  meego: {
+    config: MeegoConfig;
+    status: MeegoSyncStatus;
+    readOnly: boolean;
   };
   loop: { enabled: boolean; executionEndpoint: null };
   retention: { source_body_days: number };
@@ -1130,6 +1288,15 @@ function SettingsPage() {
         running: false,
         next_run_at: null
       }
+    },
+    meego: {
+      config: {
+        enabled: false,
+        qTagTimelineEnabled: false,
+        projectKeys: []
+      },
+      status: EMPTY_MEEGO_SYNC_STATUS,
+      readOnly: true
     },
     loop: { enabled: false, executionEndpoint: null },
     retention: { source_body_days: 90 },
@@ -1185,6 +1352,14 @@ function SettingsPage() {
     "/api/sync/lark/status",
     EMPTY_SYNC_STATUS
   );
+  const {
+    data: meegoStatus,
+    error: meegoStatusError,
+    reload: reloadMeegoStatus
+  } = useApi<MeegoSyncStatus>(
+    "/api/sync/meego/status",
+    EMPTY_MEEGO_SYNC_STATUS
+  );
   const people = useApi<ApiDocument<PersonMetadata>[]>("/api/documents?type=person", []);
   const diagnostics = useApi<MarkdownDiagnostic[]>(
     "/api/markdown/diagnostics",
@@ -1203,6 +1378,8 @@ function SettingsPage() {
   const [savingWorkerCount, setSavingWorkerCount] = useState(false);
   const [savingRetention, setSavingRetention] = useState(false);
   const [savingSyncSchedule, setSavingSyncSchedule] = useState(false);
+  const [savingMeego, setSavingMeego] = useState(false);
+  const [syncingMeego, setSyncingMeego] = useState(false);
   const [retryingJob, setRetryingJob] = useState<string | null>(null);
   const [leaderQuery, setLeaderQuery] = useState("");
   const [updatingLeader, setUpdatingLeader] = useState<string | null>(null);
@@ -1426,10 +1603,60 @@ function SettingsPage() {
     }
   }
 
+  async function saveMeego(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingMeego(true);
+    setMessage("");
+    const form = new FormData(event.currentTarget);
+    const rawProjects = String(form.get("project_keys") ?? "");
+    const projectKeys = rawProjects
+      .split(/[\s,]+/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    try {
+      await api("/api/config/meego", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: form.get("enabled") === "on",
+          qTagTimelineEnabled: form.get("q_tag_timeline_enabled") === "on",
+          projectKeys
+        })
+      });
+      setMessage("Meego 配置已保存。开关只影响后续抓取和页面过滤，不会删除已有数据。");
+      await Promise.all([config.reload(), reloadMeegoStatus()]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingMeego(false);
+    }
+  }
+
+  async function syncMeegoFromSettings() {
+    setSyncingMeego(true);
+    setMessage("");
+    try {
+      const status = await api<MeegoSyncStatus>("/api/sync/meego", {
+        method: "POST"
+      });
+      setMessage(
+        status.lastError
+          ? `Meego 同步完成，但存在问题：${status.lastError}`
+          : status.enabled
+            ? "Meego 只读同步完成。"
+            : "Meego 抓取当前已关闭。"
+      );
+      await Promise.all([config.reload(), reloadMeegoStatus()]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSyncingMeego(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Local control" title="Settings" description="人工内容由 Markdown 管理；同步、分析和审核状态保存在本机 SQLite。" />
-      <ErrorBanner message={config.error ?? people.error ?? diagnostics.error ?? markdownStatus.error ?? syncStatusError} />
+      <ErrorBanner message={config.error ?? people.error ?? diagnostics.error ?? markdownStatus.error ?? syncStatusError ?? meegoStatusError} />
       {message && <div className="info-banner">{message}</div>}
       <div className="settings-grid">
         <Section title="Lark source" subtitle="仅用户身份、只读命令">
@@ -1501,6 +1728,73 @@ function SettingsPage() {
               ? `下次同步：${formatDate(config.data.lark.schedule.next_run_at)}。触发时若已有同步运行，本周期会跳过。`
               : "定期同步当前已关闭；手动只读同步不受影响。"}
           </p>
+        </Section>
+
+        <Section title="Meego source" subtitle="显式项目空间 · 仅同步我参与的工作项">
+          <div className="setting-row">
+            <div className="setting-icon"><ListTodo size={19} /></div>
+            <div>
+              <strong>Meegle read-only adapter</strong>
+              <span>使用 all_participate_persons() 与 current_login_user() 限定参与范围</span>
+            </div>
+            <Badge tone={config.data.meego.config.enabled ? "mint" : "neutral"}>
+              {config.data.meego.config.enabled ? "Enabled" : "Disabled"}
+            </Badge>
+          </div>
+          <form className="meego-config-control" onSubmit={saveMeego}>
+            <label className="toggle-control">
+              <input
+                aria-label="开启 Meego 抓取"
+                defaultChecked={config.data.meego.config.enabled}
+                key={`meego-enabled-${config.data.meego.config.enabled}`}
+                name="enabled"
+                type="checkbox"
+              />
+              <span><strong>开启 Meego 抓取</strong><small>关闭后不会执行任何 meegle 业务查询</small></span>
+            </label>
+            <label className="toggle-control">
+              <input
+                aria-label="按 Q 标签过滤并排序"
+                defaultChecked={config.data.meego.config.qTagTimelineEnabled}
+                key={`meego-q-${config.data.meego.config.qTagTimelineEnabled}`}
+                name="q_tag_timeline_enabled"
+                type="checkbox"
+              />
+              <span><strong>按 Q 标签过滤并排序</strong><small>仅展示合法 Qxxxxx 标签；关闭时按 updated_at 倒序</small></span>
+            </label>
+            <label className="provider-control">
+              <span>Project keys（每行一个，也支持逗号分隔）</span>
+              <textarea
+                aria-label="Meego Project keys"
+                defaultValue={config.data.meego.config.projectKeys.join("\n")}
+                key={config.data.meego.config.projectKeys.join("|")}
+                name="project_keys"
+                placeholder="例如：618cd556ef01eddedd9e09aa"
+                rows={4}
+              />
+            </label>
+            <div className="meego-config-actions">
+              <button className="secondary-button" disabled={savingMeego} type="submit">
+                {savingMeego ? "保存中…" : "保存 Meego 配置"}
+              </button>
+              <button
+                className="primary-button"
+                disabled={!config.data.meego.config.enabled || syncingMeego || meegoStatus.running}
+                onClick={() => void syncMeegoFromSettings()}
+                type="button"
+              >
+                <RefreshCw className={syncingMeego || meegoStatus.running ? "spin" : ""} size={16} />
+                {syncingMeego || meegoStatus.running ? "同步中…" : "立即同步 Meego"}
+              </button>
+            </div>
+          </form>
+          <div className="sync-summary">
+            <div><span>最后完成</span><strong>{formatDate(meegoStatus.completedAt)}</strong></div>
+            <div><span>成功范围</span><strong>{meegoStatus.results.filter((result) => result.ok && !result.skipped).length}/{meegoStatus.results.filter((result) => !result.skipped).length}</strong></div>
+          </div>
+          {meegoStatus.lastError && (
+            <div className="sync-progress-error"><AlertTriangle size={14} />{meegoStatus.lastError}</div>
+          )}
         </Section>
 
         <Section title="同步状态" subtitle="运行时进度与错误">
@@ -2075,6 +2369,7 @@ export function AppView() {
         <Route path="/people" element={<PeoplePage />} />
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/timeline" element={<TimelinePage />} />
+        <Route path="/meego" element={<MeegoPage />} />
         <Route path="/loop" element={<LoopPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/search" element={<SearchPage />} />

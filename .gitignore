@@ -9,7 +9,7 @@ coverage/
 !.env.example
 
 # The canonical workspace can contain private Lark messages and work context.
-workspace/
+workspace*/
 .context-cache/
 
 # Local editor state

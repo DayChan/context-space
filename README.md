@@ -1,6 +1,6 @@
 # Context Space
 
-Context Space 是一个单用户、本机运行的工作上下文系统。它通过 `lark-cli` 只读采集与工作有关的飞书消息、日程、任务和人物，并在本地 Web 界面中呈现 Todo、人物、知识、时间线和 Loop 就绪状态。
+Context Space 是一个单用户、本机运行的工作上下文系统。它通过 `lark-cli` 只读采集与工作有关的飞书消息、日程、任务和人物，也可以通过 `meegle` 只读采集用户参与的飞书项目工作项，并在本地 Web 界面中呈现 Todo、人物、知识、时间线、Meego 和 Loop 就绪状态。
 
 存储按所有权拆分：人工维护的 Todo、人物备注和知识以 Markdown 为规范真相；飞书来源、上游数据、同步状态、设置、分析队列、LLM 候选和审核状态以 `.context/context-space.db` 中的 SQLite 为规范真相。LLM 生成的 Todo 和职场洞察会通过幂等流程直接物化为 Markdown；只有知识必须先进入 Inbox，由用户接受后才能物化。
 
@@ -20,6 +20,7 @@ Context Space 是一个单用户、本机运行的工作上下文系统。它通
 
 - Node.js 20 或更新版本
 - `lark-cli` 已安装并完成用户身份认证（仅飞书同步需要）
+- `meegle` 已安装并完成用户身份认证（仅 Meego 同步需要）
 - Codex 已完成认证（LLM 内容分析需要）
 - 选择 `codex-exec` 时，`codex` 命令必须位于 `PATH`
 
@@ -76,6 +77,27 @@ curl -X PUT http://127.0.0.1:4318/api/config/lark-sync-schedule \
 如果 `lark-cli` 返回权限不足、认证失效、参数错误或升级通知，Settings 会展示对应来源、错误代码、缺失 scope、官方处理提示以及可用的权限配置或排查链接。系统只提醒，不会自动授权或执行 `lark-cli update`。同步部分失败时，成功来源仍会保留并推进各自检查点。
 
 同步只负责把来源、上游任务、身份、游标和分析任务原子提交到 SQLite，采集完成后立即返回，不等待 LLM。本地 Worker Pool 以至少一次交付、确定性幂等键和有期限租约异步消费分析任务；Settings 分别展示同步运行和分析队列状态。
+
+## Meego 同步
+
+Meego 集成默认关闭，并与 Lark 同步使用独立配置和运行状态。先确保 `meegle auth status` 可用，再到 Settings 手动填写一个或多个 project key 并开启“Meego 抓取”；关闭该开关时，手动同步不会执行任何 Meegle 业务查询，也不会删除此前已同步的数据。
+
+同步会动态发现每个项目的工作项类型和字段，并使用以下参与人条件查询，因此只保存当前登录用户实际参与的工作项：
+
+```text
+array_contains(all_participate_persons(), current_login_user())
+```
+
+“按 Q 标签过滤并排序”开关决定 Meego 页面的展示模式：
+
+- 开启：只显示带有合法 `Qxxxxx` 标签的未完成工作项。标签格式为 `Q<季度><月><日>`，例如 `Q30828` 表示第三季度的 8 月 28 日；页面按完整标签（例如 `Q30717`）分组，并按标签解析出的月日升序排列。
+- 关闭：显示全部已同步的未完成参与项，并按 `updated_at` 倒序排列。
+
+不同工作项类型使用的完成字段并不统一。同步会按元数据选择 `finish_status`、`archiving_status` 或 `finish_time`，统一保存为 `completed`；两种列表模式都过滤已完成工作项。旧数据需要重新同步一次才能补齐完成态。
+
+项目中已停用的类型、图表等不具备普通工作项公共字段的特殊类型会显示为“已跳过”，不计为同步失败。Q 标签模式下，不提供 `tags` 字段的工作项类型也会跳过；关闭 Q 标签模式后，只要具备名称、ID 和更新时间，这些类型仍可正常同步。
+
+Settings 和 Meego 页面均可触发独立的手动只读同步。直接调用 API 时可使用 `PUT /api/config/meego` 保存配置、`POST /api/sync/meego` 触发同步，并通过 `GET /api/sync/meego/status` 查看状态。项目或工作项类型级失败会独立展示，不会污染 Lark 同步状态。
 
 ## LLM 内容分析
 

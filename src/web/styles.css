@@ -167,6 +167,10 @@ a { color: inherit; text-decoration: none; }
 .source-row strong, .knowledge-mini strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .source-row span, .knowledge-mini small { margin-top: 3px; color: #999c9e; font-size: 9px; }
 .source-row > svg { color: #b4b4b2; }
+.meego-row { color: inherit; }
+.meego-row .meego-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.meego-row .meego-tags .badge { margin-top: 0; }
+.meego-groups { display: grid; gap: 16px; }
 .loop-teaser {
   min-height: 105px; padding: 18px; display: flex; align-items: center; justify-content: space-between;
   color: #f3eff8; border-radius: 15px; background: linear-gradient(135deg, #26364b, #38445a 58%, #654f79); box-shadow: var(--shadow);
@@ -297,8 +301,17 @@ a { color: inherit; text-decoration: none; }
 .sync-progress-error { margin-top: 9px; padding: 8px; display: flex; align-items: flex-start; gap: 6px; border-radius: 7px; color: #8b4d40; background: var(--coral-soft); font-size: 8px; line-height: 1.5; }
 .sync-progress-error svg { flex: 0 0 auto; }
 .provider-control { margin-top: 16px; display: grid; gap: 6px; color: #8c9092; font-size: 9px; }
-.provider-control select, .provider-control input { width: 100%; padding: 10px; border: 1px solid #d9d5cc; border-radius: 8px; color: #384653; background: #f7f5ef; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.provider-control select, .provider-control input, .provider-control textarea { width: 100%; padding: 10px; border: 1px solid #d9d5cc; border-radius: 8px; color: #384653; background: #f7f5ef; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.provider-control textarea { resize: vertical; line-height: 1.5; }
 .provider-control select:disabled, .provider-control input:disabled { color: #8e8e8b; cursor: not-allowed; }
+.meego-config-control { margin-top: 15px; display: grid; gap: 10px; }
+.toggle-control { padding: 10px; display: flex; align-items: center; gap: 10px; border: 1px solid #dfdcd4; border-radius: 9px; background: #f6f4ee; cursor: pointer; }
+.toggle-control input { width: 16px; height: 16px; accent-color: var(--mint); }
+.toggle-control > span { min-width: 0; display: flex; flex-direction: column; }
+.toggle-control strong { font-size: 10px; }
+.toggle-control small { margin-top: 3px; color: #929697; font-size: 8px; line-height: 1.4; }
+.meego-config-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.meego-config-actions button { flex: 1; justify-content: center; }
 .model-control { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 8px; }
 .model-control .secondary-button { margin-bottom: 0; }
 .sync-schedule-control { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr 1fr auto; align-items: end; gap: 8px; }
