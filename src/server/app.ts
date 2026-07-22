@@ -37,6 +37,7 @@ import {
 } from "../analysis/worker";
 import { CodexExecProvider } from "../analysis/providers/codex-exec";
 import { CodexSdkProvider } from "../analysis/providers/codex-sdk";
+import { TraexProvider } from "../analysis/providers/traex";
 import { AnalysisProviderRegistry } from "../analysis/providers/registry";
 import { ANALYSIS_PROMPT_VERSION } from "../analysis/prompt";
 import { ANALYSIS_SCHEMA_VERSION } from "../analysis/schema";
@@ -576,7 +577,8 @@ export async function createApp(options: CreateAppOptions): Promise<{
   const analysisProviders = new AnalysisProviderRegistry(
     options.analysisProviders ?? [
       new CodexSdkProvider({ environment }),
-      new CodexExecProvider({ environment })
+      new CodexExecProvider({ environment }),
+      new TraexProvider({ environment })
     ]
   );
   const machineContext = new MachineContextRepository(database);

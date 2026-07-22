@@ -2338,7 +2338,7 @@ function SettingsPage() {
           </label>
           <form className="model-control" onSubmit={saveModel}>
             <label className="provider-control">
-              <span>模型（留空使用 Codex 默认）</span>
+              <span>模型（留空使用当前 Provider 默认）</span>
               <input
                 key={config.data.analysis.config.model ?? "codex-default"}
                 aria-label="LLM 分析模型"
@@ -2445,7 +2445,7 @@ function SettingsPage() {
             </div>
           ))}
           <div className="sync-summary analysis-summary">
-            <div><span>当前模型</span><strong>{config.data.analysis.config.model ?? "Codex 默认"}</strong></div>
+            <div><span>当前模型</span><strong>{config.data.analysis.config.model ?? "Provider 默认"}</strong></div>
             {config.data.analysis.current_provider === "codex-sdk" && (
               <div><span>推理强度</span><strong>{config.data.analysis.config.reasoning_effort}</strong></div>
             )}
@@ -2457,7 +2457,7 @@ function SettingsPage() {
             <p className="provider-error">{config.data.analysis.status.last_error_message}</p>
           )}
           <p className="muted-copy">
-            SDK 方式可能使用 Codex 标准本地会话存储；codex-exec 使用 ephemeral 模式。两种方式均使用只读隔离目录，失败时不会静默切换。
+            SDK 方式可能使用 Codex 标准本地会话存储；codex-exec 与 traex 使用 ephemeral 模式。三种方式均使用只读隔离目录，失败时不会静默切换。
           </p>
         </Section>
 

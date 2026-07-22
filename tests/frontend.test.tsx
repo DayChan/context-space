@@ -294,7 +294,8 @@ function configResponse() {
       },
       providers: [
         { id: "codex-sdk", available: true, detail: "SDK 可用" },
-        { id: "codex-exec", available: true, detail: "CLI 可用" }
+        { id: "codex-exec", available: true, detail: "CLI 可用" },
+        { id: "traex", available: true, detail: "traex CLI 可用" }
       ],
       prompt_version: "context-analysis@4",
       schema_version: "work-context/analysis@2",
@@ -1311,6 +1312,7 @@ describe("Context Space workbench", () => {
     const selector = await screen.findByLabelText("LLM 分析 Provider");
     expect(screen.getByText("SDK 可用")).toBeInTheDocument();
     expect(screen.getByText("CLI 可用")).toBeInTheDocument();
+    expect(within(selector).getByRole("option", { name: "traex" })).toBeInTheDocument();
     await user.selectOptions(selector, "codex-exec");
     expect(
       await screen.findByText("后续分析将使用 codex-exec；运行中的分析不受影响。")

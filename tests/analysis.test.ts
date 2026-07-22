@@ -8,6 +8,7 @@ import { buildAnalysisBatches } from "../src/analysis/batch";
 import {
   AnalysisProviderError,
   minimalCodexEnvironment,
+  sanitizedErrorMessage,
   type AnalysisProvider,
   type ProviderAnalysisRequest,
   type ProviderAnalysisResponse
@@ -19,6 +20,10 @@ import type {
   CodexExecRunner
 } from "../src/analysis/providers/codex-exec-runner";
 import { CodexSdkProvider } from "../src/analysis/providers/codex-sdk";
+import {
+  buildTraexArguments,
+  TraexProvider
+} from "../src/analysis/providers/traex";
 import { AnalysisProviderRegistry } from "../src/analysis/providers/registry";
 import {
   analysisJsonSchema,
@@ -303,6 +308,109 @@ describe("versioned prompt and structured validation", () => {
     expect(JSON.stringify(schema)).toContain('"anyOf"');
     expect(JSON.stringify(schema)).not.toContain('"oneOf"');
     expect(schema.$schema).toBeUndefined();
+  });
+});
+
+describe("traex provider contract", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "context-space-traex-provider-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("uses ephemeral read-only structured execution and maps the response", async () => {
+    let runInput: CodexExecRunInput | undefined;
+    const runner: CodexExecRunner = {
+      getAvailability: async () => ({ available: true, detail: "traex CLI 可用" }),
+      run: async (input) => {
+        runInput = input;
+        const resultPath = input.args[input.args.indexOf("--output-last-message") + 1];
+        await writeFile(resultPath, output([]));
+        return {
+          stdout: [
+            JSON.stringify({ item: { type: "model_reroute" } }),
+            JSON.stringify({ item: { type: "reasoning" } }),
+            JSON.stringify({ item: { type: "agent_message" } }),
+            JSON.stringify({
+              type: "turn.completed",
+              usage: {
+                input_tokens: 12,
+                cached_input_tokens: 3,
+                output_tokens: 5,
+                reasoning_output_tokens: 2
+              }
+            })
+          ].join("\n"),
+          stderr: ""
+        };
+      }
+    };
+    const provider = new TraexProvider({
+      runner,
+      environment: {
+        PATH: "/bin",
+        HOME: "/tmp/home",
+        TRAE_HOME: "/tmp/trae",
+        PRIVATE_SECRET: "must-not-leak"
+      }
+    });
+
+    const response = await provider.analyze(
+      { ...providerRequest(root), model: "test-model" },
+      new AbortController().signal
+    );
+
+    expect(runInput?.executable).toBe("traex");
+    expect(runInput?.args).toEqual(
+      buildTraexArguments(
+        path.join(root, "output-schema.json"),
+        path.join(root, "final-response.json"),
+        "test-model"
+      )
+    );
+    expect(runInput?.args).toEqual(expect.arrayContaining([
+      "--ephemeral",
+      "--sandbox",
+      "read-only",
+      "--ignore-rules",
+      "--output-schema"
+    ]));
+    expect(runInput?.env).toMatchObject({ TRAE_HOME: "/tmp/trae" });
+    expect(runInput?.env).not.toHaveProperty("PRIVATE_SECRET");
+    expect(response.finalResponse).toBe(output([]));
+    expect(response.eventTypes).toEqual([
+      "model_reroute",
+      "reasoning",
+      "agent_message"
+    ]);
+    expect(response.usage?.input_tokens).toBe(12);
+  });
+
+  it("rejects tool activity reported by traex", async () => {
+    const runner: CodexExecRunner = {
+      getAvailability: async () => ({ available: true, detail: "traex CLI 可用" }),
+      run: async (input) => {
+        const resultPath = input.args[input.args.indexOf("--output-last-message") + 1];
+        await writeFile(resultPath, output([]));
+        return {
+          stdout: JSON.stringify({ item: { type: "command_execution" } }),
+          stderr: ""
+        };
+      }
+    };
+    await expect(
+      new TraexProvider({ runner }).analyze(
+        providerRequest(root),
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({
+      code: "tool_activity",
+      eventTypes: ["command_execution"]
+    });
   });
 });
 
@@ -1096,5 +1204,17 @@ describe("analysis coordinator integration", () => {
       HOME: "/tmp/home",
       OPENAI_API_KEY: "allowed-for-child-only"
     });
+  });
+
+  it("redacts credentials without corrupting ordinary CLI arguments", () => {
+    expect(sanitizedErrorMessage("unexpected argument '--ask-for-approval'")).toBe(
+      "unexpected argument '--ask-for-approval'"
+    );
+    expect(sanitizedErrorMessage("token=sk-secretvalue123")).toBe(
+      "token=[已脱敏]"
+    );
+    expect(sanitizedErrorMessage("Bearer secretvalue123 failed")).toBe(
+      "Bearer [已脱敏] failed"
+    );
   });
 });

@@ -40,17 +40,20 @@ export type SpawnCodexProcess = (
 
 export interface NodeCodexExecRunnerOptions {
   executable?: string;
+  displayName?: string;
   environment?: NodeJS.ProcessEnv;
   spawnProcess?: SpawnCodexProcess;
 }
 
 export class NodeCodexExecRunner implements CodexExecRunner {
   readonly executable: string;
+  private readonly displayName: string;
   private readonly environment: NodeJS.ProcessEnv;
   private readonly spawnProcess: SpawnCodexProcess;
 
   constructor(options: NodeCodexExecRunnerOptions = {}) {
     this.executable = options.executable ?? "codex";
+    this.displayName = options.displayName ?? "codex CLI";
     this.environment = options.environment ?? process.env;
     this.spawnProcess =
       options.spawnProcess ??
@@ -73,14 +76,14 @@ export class NodeCodexExecRunner implements CodexExecRunner {
           if (error) {
             resolve({
               available: false,
-              detail: `codex CLI 不可用：${sanitizedErrorMessage(error)}`
+              detail: `${this.displayName} 不可用：${sanitizedErrorMessage(error)}`
             });
             return;
           }
           const version = stdout.trim();
           resolve({
             available: true,
-            detail: version || "codex CLI 可用",
+            detail: version || `${this.displayName} 可用`,
             ...(version ? { version } : {})
           });
         }
@@ -90,7 +93,7 @@ export class NodeCodexExecRunner implements CodexExecRunner {
 
   async run(input: CodexExecRunInput): Promise<CodexExecRunOutput> {
     if (input.signal.aborted) {
-      throw new AnalysisProviderError("cancelled", "codex exec 分析已取消");
+      throw new AnalysisProviderError("cancelled", `${this.displayName} 分析已取消`);
     }
     return new Promise((resolve, reject) => {
       const child = this.spawnProcess(input.executable, input.args, {
@@ -116,9 +119,9 @@ export class NodeCodexExecRunner implements CodexExecRunner {
         reject(error);
       };
       const cancel = () =>
-        fail(new AnalysisProviderError("cancelled", "codex exec 分析已取消"));
+        fail(new AnalysisProviderError("cancelled", `${this.displayName} 分析已取消`));
       const timer = setTimeout(
-        () => fail(new AnalysisProviderError("timeout", "codex exec 分析超时")),
+        () => fail(new AnalysisProviderError("timeout", `${this.displayName} 分析超时`)),
         input.timeoutMs
       );
       input.signal.addEventListener("abort", cancel, { once: true });
@@ -126,7 +129,7 @@ export class NodeCodexExecRunner implements CodexExecRunner {
       child.stdout.on("data", (chunk: Buffer) => {
         outputBytes += chunk.length;
         if (outputBytes > input.maxOutputBytes) {
-          fail(new AnalysisProviderError("output_too_large", "codex exec JSONL 输出超过大小限制"));
+          fail(new AnalysisProviderError("output_too_large", `${this.displayName} JSONL 输出超过大小限制`));
           return;
         }
         stdout.push(chunk);
@@ -137,7 +140,7 @@ export class NodeCodexExecRunner implements CodexExecRunner {
       });
       child.once("error", (error: NodeJS.ErrnoException) => {
         const code = error.code === "ENOENT" ? "provider_unavailable" : "provider_failed";
-        fail(new AnalysisProviderError(code, `无法启动 codex exec：${sanitizedErrorMessage(error)}`));
+        fail(new AnalysisProviderError(code, `无法启动 ${this.displayName}：${sanitizedErrorMessage(error)}`));
       });
       child.once("close", (code, terminationSignal) => {
         if (settled) return;
@@ -149,7 +152,7 @@ export class NodeCodexExecRunner implements CodexExecRunner {
           const errorCode = /auth|unauthor|api key|login|credential/i.test(message)
             ? "authentication_failed"
             : "provider_failed";
-          reject(new AnalysisProviderError(errorCode, `codex exec 调用失败：${message}`));
+          reject(new AnalysisProviderError(errorCode, `${this.displayName} 调用失败：${message}`));
           return;
         }
         resolve({

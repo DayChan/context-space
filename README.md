@@ -24,6 +24,7 @@ Context Space 是一个单用户、本机运行的工作上下文系统。它通
 - `meegle` 已安装并完成用户身份认证（仅 Meego 同步需要）
 - Codex 已完成认证（LLM 内容分析需要）
 - 选择 `codex-exec` 时，`codex` 命令必须位于 `PATH`
+- 选择 `traex` 时，`traex` 命令必须位于 `PATH`，并已完成认证
 
 Codex SDK 和非交互 CLI 的当前接口说明见 [Codex SDK 官方文档](https://developers.openai.com/codex/sdk/)与 [Codex 非交互模式官方文档](https://developers.openai.com/codex/noninteractive/)。
 
@@ -141,10 +142,11 @@ max_reanalysis_records: 50
 
 `max_source_chars` 是单条消息正文上限，`max_batch_records` 和 `max_batch_source_chars` 分别限制单次请求的消息数与正文总字符数。系统会在两个批次上限内尽量装满上下文；不会无边界地把整个历史工作区塞进一次请求。
 
-首期支持两种调用方式：
+支持三种调用方式：
 
 - `codex-sdk`：默认方式，服务端通过 `@openai/codex-sdk` 创建新线程，并为每次分析传入统一 JSON Schema。SDK 遵循 Codex 的标准本地会话行为，可能在 Codex 主目录下保留会话元数据。
 - `codex-exec`：调用本机 `codex exec`，使用 `--ephemeral`、`--sandbox read-only`、`--json`、`--output-schema` 和 `--output-last-message`，不保留会话文件。
+- `traex`：调用本机 `traex exec`，使用同样的 ephemeral、只读沙箱、无审批、结构化输出和工具活动拒绝约束。
 
 可在 Settings 中显式切换 Provider 和模型；选择 `codex-sdk` 时还可以设置推理强度。也可以调用本地 API：
 
@@ -155,9 +157,9 @@ curl -X PUT http://127.0.0.1:4318/api/config/analysis \
   -d '{"provider":"codex-sdk","model":"gpt-5.6-sol","reasoning_effort":"medium"}'
 ```
 
-Codex SDK 支持选择模型和推理强度：非空 `model` 与 `reasoning_effort` 会分别传给 `startThread({ model, modelReasoningEffort })`。推理强度支持 `minimal`、`low`、`medium`、`high`、`xhigh`，默认 `medium`。Exec 方式仅将模型传给 `codex exec --model`。将 `model` 清空或保存为 `null` 时，Codex 使用当前推荐默认模型。系统不硬编码模型列表，也不会在模型不可用时静默切换；可用性由当前 Codex 认证和服务端决定。
+Codex SDK 支持选择模型和推理强度：非空 `model` 与 `reasoning_effort` 会分别传给 `startThread({ model, modelReasoningEffort })`。推理强度支持 `minimal`、`low`、`medium`、`high`、`xhigh`，默认 `medium`。CLI 方式仅将非空模型传给对应命令的 `--model`；模型留空或保存为 `null` 时使用当前 Provider 的默认模型。系统不硬编码模型列表，也不会在模型不可用时静默切换；可用性由对应 Agent 工具的认证和服务端决定。
 
-部署时可以使用 `CONTEXT_SPACE_ANALYSIS_PROVIDER=codex-sdk` 或 `codex-exec` 覆盖 SQLite 配置。覆盖生效时 Settings 的 Provider 选择会被锁定。认证信息只应保存在 Codex 自身认证存储或进程环境中。
+部署时可以使用 `CONTEXT_SPACE_ANALYSIS_PROVIDER=codex-sdk`、`codex-exec` 或 `traex` 覆盖 SQLite 配置。覆盖生效时 Settings 的 Provider 选择会被锁定。认证信息只应保存在对应 Agent 工具自身的认证存储或进程环境中。
 
 LLM Worker 数量是独立的调度配置，不进入分析任务快照或幂等键。可在 Settings 中设置为 `1–8`，默认 `1`；扩容立即开始并行领取任务，缩容不会中断正在运行的分析。也可以用 `CONTEXT_SPACE_ANALYSIS_WORKERS=1` 覆盖并锁定该配置，或调用：
 
@@ -179,7 +181,7 @@ curl -X PUT http://127.0.0.1:4318/api/config/analysis/workers \
 
 ### 处理 `tool_activity`
 
-Codex SDK 的运行项目不全是工具调用：`todo_list` 是内部计划，`error` 也可能是无副作用的非致命项目。旧实现只允许 `agent_message` 和 `reasoning`，因此可能把这些项目误报为 `tool_activity`；同时 Provider 在抛错前没有把事件类型带回协调器，所以旧失败记录中的 `event_types` 可能为空。
+Agent CLI 的运行项目不全是工具调用：`todo_list` 是内部计划，`model_reroute` 是模型路由信息，`error` 也可能是无副作用的非致命项目。系统只明确允许这些无副作用事件；Provider 在抛错前会把事件类型带回协调器，便于区分误判与真实工具活动。
 
 当前实现允许已知的无副作用项目，并继续拒绝命令执行、文件修改、MCP、Web 搜索及未知项目类型。拒绝时会把真实事件类型写入运行记录。升级后可对原来源重新分析：
 
@@ -190,7 +192,7 @@ curl -X POST http://127.0.0.1:4318/api/analysis/reanalyze \
   -d '{"source_id":"lark:message:替换为失败记录中的来源ID"}'
 ```
 
-如果新记录中的 `event_types` 是 `todo_list` 或 `error`，当前版本不会再误报；如果出现 `command_execution`、`file_change`、`mcp_tool_call` 或 `web_search`，说明运行确实产生了被禁止的工具活动，结果会继续被拒绝。
+如果新记录中的 `event_types` 是 `todo_list`、`model_reroute` 或 `error`，当前版本不会误报；如果出现 `command_execution`、`file_change`、`mcp_tool_call` 或 `web_search`，说明运行确实产生了被禁止的工具活动，结果会继续被拒绝。其他未知事件同样默认拒绝。
 
 ### 显式冒烟测试
 

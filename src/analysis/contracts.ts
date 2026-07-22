@@ -1,6 +1,10 @@
 import type { BaseMetadata } from "../core/types";
 
-export const BUILT_IN_ANALYSIS_PROVIDERS = ["codex-sdk", "codex-exec"] as const;
+export const BUILT_IN_ANALYSIS_PROVIDERS = [
+  "codex-sdk",
+  "codex-exec",
+  "traex"
+] as const;
 export type BuiltInAnalysisProviderId = (typeof BUILT_IN_ANALYSIS_PROVIDERS)[number];
 
 export const CODEX_REASONING_EFFORTS = [
@@ -144,6 +148,7 @@ const NON_SIDE_EFFECTING_ITEM_TYPES = new Set([
   "agent_message",
   "reasoning",
   "todo_list",
+  "model_reroute",
   "error"
 ]);
 
@@ -177,6 +182,7 @@ export function minimalCodexEnvironment(
     "TEMP",
     "TMP",
     "CODEX_HOME",
+    "TRAE_HOME",
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "SSL_CERT_FILE",
@@ -196,7 +202,11 @@ export function minimalCodexEnvironment(
 export function sanitizedErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw
-    .replace(/(?:sk-|sess-|Bearer\s+)[A-Za-z0-9._-]{8,}/gi, "[已脱敏]")
+    .replace(/\bBearer\s+[A-Za-z0-9._-]{8,}/gi, "Bearer [已脱敏]")
+    .replace(
+      /(^|[\s"'=:])(?:sk-|sess-)[A-Za-z0-9._-]{8,}/gi,
+      "$1[已脱敏]"
+    )
     .replace(/[\r\n]+/g, " ")
     .slice(0, 500);
 }
