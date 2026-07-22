@@ -795,6 +795,55 @@ function SourceRow({ source }: { source: SourceMetadata }) {
   );
 }
 
+function CalendarRow({ source }: { source: SourceMetadata }) {
+  const start = new Date(source.occurred_at);
+  const rawEnd = source.provider_metadata.end;
+  const end =
+    typeof rawEnd === "string" || typeof rawEnd === "number"
+      ? new Date(rawEnd)
+      : null;
+  const validEnd = end && !Number.isNaN(end.getTime()) ? end : null;
+  const day = new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    weekday: "short"
+  }).format(start);
+  const clock = new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  const timeRange = validEnd
+    ? `${clock.format(start)}–${clock.format(validEnd)}`
+    : clock.format(start);
+  const location =
+    typeof source.provider_metadata.location === "string"
+      ? source.provider_metadata.location
+      : "";
+
+  return (
+    <Link
+      className="calendar-row"
+      to={`/documents/${encodeURIComponent(source.id)}`}
+    >
+      <time className="calendar-row-time" dateTime={source.occurred_at}>
+        <strong>{timeRange}</strong>
+        <span>{day}</span>
+      </time>
+      <div className="calendar-row-main">
+        <strong title={source.title}>{source.title}</strong>
+        <span>
+          {location ||
+            (source.participants.length
+              ? `${source.participants.length} 位参与人`
+              : "飞书日历")}
+        </span>
+      </div>
+      <ChevronRight className="row-arrow" size={15} />
+    </Link>
+  );
+}
+
 function MeegoItemRow({ item }: { item: MeegoItem }) {
   const content = (
     <>
@@ -925,7 +974,15 @@ function NowPage() {
 
         <div className="dashboard-side">
           <Section title="未来 24 小时" subtitle="近期日程">
-            {data.upcomingCalendar.length ? data.upcomingCalendar.map((source) => <SourceRow key={source.id} source={source} />) : <EmptyState icon={CalendarDays} title="日程清空" description="未来 24 小时没有已同步的日程。" />}
+            {data.upcomingCalendar.length ? (
+              <div className="calendar-list" aria-label="未来 24 小时日程">
+                {data.upcomingCalendar.map((source) => (
+                  <CalendarRow key={source.id} source={source} />
+                ))}
+              </div>
+            ) : (
+              <EmptyState icon={CalendarDays} title="日程清空" description="未来 24 小时没有已同步的日程。" />
+            )}
           </Section>
           <Link className="loop-teaser" to="/loop">
             <div>

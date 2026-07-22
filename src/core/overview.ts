@@ -68,10 +68,20 @@ export function buildOverview(
     topTodos,
     upcomingCalendar: sources
       .filter(
-        (source) =>
-          source.source_kind === "calendar" &&
-          new Date(source.occurred_at).getTime() >= now &&
-          new Date(source.occurred_at).getTime() <= horizon
+        (source) => {
+          if (source.source_kind !== "calendar") return false;
+          const start = new Date(source.occurred_at).getTime();
+          const rawEnd = source.provider_metadata.end;
+          const end =
+            typeof rawEnd === "string" || typeof rawEnd === "number"
+              ? new Date(rawEnd).getTime()
+              : start;
+          return (
+            Number.isFinite(start) &&
+            start <= horizon &&
+            (Number.isFinite(end) ? end : start) >= now
+          );
+        }
       )
       .sort((left, right) => left.occurred_at.localeCompare(right.occurred_at)),
     recentMentions: sources

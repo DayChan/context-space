@@ -181,7 +181,25 @@ const personProvenanceSources = Array.from({ length: 11 }, (_, index) => {
 
 const overview: Overview = {
   topTodos: [owedTodo],
-  upcomingCalendar: [],
+  upcomingCalendar: Array.from({ length: 6 }, (_, index) => ({
+    schema: "work-context/source@1" as const,
+    id: `calendar_home_${index + 1}`,
+    type: "source" as const,
+    title: index === 0 ? "发布评审会议" : `未来日程 ${index + 1}`,
+    managed: "generated" as const,
+    created_at: `2026-07-22T${String(10 + index).padStart(2, "0")}:00:00Z`,
+    updated_at: `2026-07-22T${String(10 + index).padStart(2, "0")}:00:00Z`,
+    source_refs: [],
+    provider: "lark" as const,
+    source_kind: "calendar" as const,
+    source_id: `lark:calendar:calendar_home_${index + 1}`,
+    occurred_at: `2026-07-22T${String(10 + index).padStart(2, "0")}:00:00Z`,
+    participants: [],
+    provider_metadata: {
+      end: `2026-07-22T${String(11 + index).padStart(2, "0")}:00:00Z`,
+      location: index === 0 ? "发布会议室" : ""
+    }
+  })),
   recentMentions: [],
   upstreamTasks: [],
   waitingItems: [waitingTodo],
@@ -849,6 +867,10 @@ describe("Context Space workbench", () => {
     render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/"]}><AppView /></MemoryRouter>);
     expect(await screen.findByText("准备发布计划")).toBeInTheDocument();
     expect(screen.getByText("Leader 相关交付")).toBeInTheDocument();
+    const calendar = screen.getByLabelText("未来 24 小时日程");
+    expect(calendar).toHaveClass("calendar-list");
+    expect(within(calendar).getByText("发布评审会议")).toBeInTheDocument();
+    expect(within(calendar).getAllByRole("link")).toHaveLength(6);
     for (const label of ["Now", "Inbox", "Todos", "People", "Knowledge", "Timeline", "Meego", "Loop", "Settings"]) {
       expect(screen.getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
     }

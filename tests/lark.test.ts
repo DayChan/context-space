@@ -14,6 +14,7 @@ import {
   type LarkPermissionChecker
 } from "../src/adapters/lark/permissions";
 import {
+  normalizeCalendar,
   normalizeMessages,
   normalizeTasks
 } from "../src/adapters/lark/normalize";
@@ -323,6 +324,40 @@ describe("read-only Lark adapter", () => {
     root = await mkdtemp(path.join(os.tmpdir(), "context-space-lark-"));
   });
 
+  it("normalizes the real agenda time objects and keeps calendar IDs stable", () => {
+    const [event] = normalizeCalendar({
+      ok: true,
+      data: [
+        {
+          event_id: "event_1_1784714400",
+          summary: "Launch review",
+          description: "Review the launch plan",
+          start_time: {
+            datetime: "2026-07-22T18:00:00+08:00",
+            timezone: "Asia/Shanghai"
+          },
+          end_time: {
+            datetime: "2026-07-22T19:00:00+08:00",
+            timezone: "Asia/Shanghai"
+          },
+          location: { name: "Room 8" },
+          app_link: "https://applink.larkoffice.com/calendar/event_1"
+        }
+      ]
+    });
+
+    expect(event).toMatchObject({
+      sourceId: "lark:calendar:event_1_1784714400",
+      occurredAt: "2026-07-22T10:00:00.000Z",
+      metadata: {
+        start: "2026-07-22T10:00:00.000Z",
+        end: "2026-07-22T11:00:00.000Z",
+        location: "Room 8",
+        url: "https://applink.larkoffice.com/calendar/event_1"
+      }
+    });
+  });
+
   afterEach(async () => {
     for (const database of testDatabases.splice(0)) database.close();
     await rm(root, { recursive: true, force: true });
@@ -572,6 +607,37 @@ describe("read-only Lark adapter", () => {
       ])
     );
     expect(tasks).toEqual(expect.arrayContaining(["--complete=false", "--page-all"]));
+  });
+
+  it("queries a bounded calendar window that includes the next 24 hours", async () => {
+    const runner = new FakeRunner();
+    const sync = await createTestSync(root, new LarkAdapter(runner));
+
+    await sync.sync({
+      now: new Date("2026-07-22T10:00:00.000Z"),
+      backfillDays: 1,
+      reconciliationHours: 1
+    });
+
+    const calendar = runner.calls.find(
+      ([service, command]) =>
+        service === "calendar" && command === "+agenda"
+    );
+    expect(calendar).toEqual(
+      expect.arrayContaining([
+        "--start",
+        "2026-07-21T10:00:00Z",
+        "--end",
+        "2026-07-23T10:00:00Z"
+      ])
+    );
+    const mention = runner.calls.find(
+      ([service, command]) =>
+        service === "im" && command === "+messages-search"
+    );
+    expect(mention).toEqual(
+      expect.arrayContaining(["--end", "2026-07-22T10:00:00Z"])
+    );
   });
 
   it("continues P2P collection beyond forty pages and keeps page tokens out of logs", async () => {

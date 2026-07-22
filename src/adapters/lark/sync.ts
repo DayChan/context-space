@@ -30,6 +30,7 @@ const DEFAULT_BACKFILL_DAYS = 1;
 const DEFAULT_RECONCILIATION_HOURS = 1;
 const DEFAULT_WINDOW_DAYS = 7;
 const HOUR_MILLISECONDS = 60 * 60 * 1_000;
+const CALENDAR_HORIZON_HOURS = 24;
 
 function isMessageSource(
   source: LarkSyncSource
@@ -361,16 +362,27 @@ export class LarkSyncService {
     for (const source of sources) {
       const sourceStarted = process.hrtime.bigint();
       const previous = this.syncRepository.getCursor(source);
-      const start = synchronizationStart({
-        previousCursor: previous,
-        now,
-        backfillDays,
-        reconciliationHours
-      });
+      const start =
+        source === "calendar"
+          ? new Date(
+              now.getTime() - CALENDAR_HORIZON_HOURS * HOUR_MILLISECONDS
+            )
+          : synchronizationStart({
+              previousCursor: previous,
+              now,
+              backfillDays,
+              reconciliationHours
+            });
+      const end =
+        source === "calendar"
+          ? new Date(
+              now.getTime() + CALENDAR_HORIZON_HOURS * HOUR_MILLISECONDS
+            )
+          : now;
       const windows =
-        source === "mentions" || source === "p2p" || source === "calendar"
-          ? splitWindows(start, now, windowDays)
-          : [{ start, end: now }];
+        source === "mentions" || source === "p2p"
+          ? splitWindows(start, end, windowDays)
+          : [{ start, end }];
       let sourceResult: SyncSourceResult = {
         source,
         ok: true,

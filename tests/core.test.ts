@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mapNativeTask } from "../src/core/analyzer";
 import { ContextIndex } from "../src/core/index";
+import { buildOverview } from "../src/core/overview";
 import {
   DocumentConflictError,
   MarkdownStore,
@@ -15,7 +16,11 @@ import {
   safeObservations
 } from "../src/core/people";
 import { calculatePriority, createTodoMetadata } from "../src/core/todo";
-import type { NormalizedSourceRecord } from "../src/core/types";
+import type {
+  NormalizedSourceRecord,
+  SourceMetadata,
+  WorkspaceDocument
+} from "../src/core/types";
 import { initializeWorkspace } from "../src/core/workspace";
 
 describe("Markdown workspace and domain core", () => {
@@ -98,6 +103,66 @@ describe("Markdown workspace and domain core", () => {
         new Date("2026-07-20T09:00:00.000Z")
       ).effective
     ).toBe(12);
+  });
+
+  it("includes ongoing and upcoming calendar events in the next 24 hours", () => {
+    const calendar = (
+      id: string,
+      start: string,
+      end: string
+    ): WorkspaceDocument<SourceMetadata> => ({
+      path: `.context/machine/sources/${id}`,
+      body: "",
+      etag: id,
+      data: {
+        schema: "work-context/source@1",
+        id,
+        type: "source",
+        title: id,
+        managed: "generated",
+        created_at: start,
+        updated_at: start,
+        source_refs: [],
+        provider: "lark",
+        source_kind: "calendar",
+        source_id: id,
+        occurred_at: start,
+        participants: [],
+        provider_metadata: { end }
+      }
+    });
+    const overview = buildOverview(
+      [
+        calendar(
+          "ongoing",
+          "2026-07-22T09:30:00.000Z",
+          "2026-07-22T10:30:00.000Z"
+        ),
+        calendar(
+          "upcoming",
+          "2026-07-22T11:00:00.000Z",
+          "2026-07-22T12:00:00.000Z"
+        ),
+        calendar(
+          "finished",
+          "2026-07-22T08:00:00.000Z",
+          "2026-07-22T09:00:00.000Z"
+        ),
+        calendar(
+          "too-late",
+          "2026-07-23T11:00:00.000Z",
+          "2026-07-23T12:00:00.000Z"
+        )
+      ],
+      [],
+      undefined,
+      new Date("2026-07-22T10:00:00.000Z")
+    );
+
+    expect(overview.upcomingCalendar.map(({ id }) => id)).toEqual([
+      "ongoing",
+      "upcoming"
+    ]);
   });
 
   it("projects mutual commitments and filters sensitive observations", () => {

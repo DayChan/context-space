@@ -41,7 +41,10 @@ function isoTime(value: unknown, fallback = new Date().toISOString()): string {
   }
   if (value && typeof value === "object") {
     const entry = object(value);
-    return isoTime(entry.timestamp ?? entry.date ?? entry.time, fallback);
+    return isoTime(
+      entry.datetime ?? entry.timestamp ?? entry.date ?? entry.time,
+      fallback
+    );
   }
   return fallback;
 }
@@ -166,16 +169,21 @@ export function normalizeCalendar(payload: unknown): NormalizedSourceRecord[] {
     const occurredAt = isoTime(start);
     const id = firstString(event.event_id, event.id, event.uid);
     if (!id) return [];
+    const location = firstString(
+      object(event.location).name,
+      event.location,
+      object(event.room).name
+    );
     const attendees = arrayFrom(event.attendees, ["items"])
       .map((entry) => participant(entry, "attendee", "Attendee"))
       .filter(Boolean) as SourceParticipant[];
     return [
       {
-        sourceId: `lark:calendar:${id}:${occurredAt}`,
+        sourceId: `lark:calendar:${id}`,
         provider: "lark",
         kind: "calendar",
         title: firstString(event.summary, event.title, "Calendar event"),
-        text: firstString(event.description, event.location?.name),
+        text: firstString(event.description, location),
         occurredAt,
         participants: attendees,
         metadata: {
@@ -183,7 +191,12 @@ export function normalizeCalendar(payload: unknown): NormalizedSourceRecord[] {
           start: occurredAt,
           end: isoTime(event.end_time ?? event.end ?? event.end_at, occurredAt),
           status: event.status,
-          url: event.url
+          location,
+          url: firstString(
+            event.url,
+            event.app_link,
+            object(event.vchat).meeting_url
+          )
         }
       }
     ];
