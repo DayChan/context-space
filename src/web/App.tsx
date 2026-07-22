@@ -56,6 +56,7 @@ import type {
   OpenSpecWorkflow,
   KnowledgeMetadata,
   LeaderConfig,
+  LarkPermissionPreflight,
   LoopReadiness,
   MeegoConfig,
   MeegoItem,
@@ -416,6 +417,69 @@ function LarkSyncIssues({ status }: { status: SyncStatus }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function LarkPermissionStatus({
+  preflight,
+  checking,
+  onRetry
+}: {
+  preflight: LarkPermissionPreflight;
+  checking: boolean;
+  onRetry: () => void;
+}) {
+  const stateLabels: Record<LarkPermissionPreflight["state"], string> = {
+    ready: "权限已就绪",
+    cli_missing: "未安装 CLI",
+    authentication_required: "需要登录",
+    missing_permissions: "缺少权限",
+    check_failed: "检查失败"
+  };
+  const blocked = !preflight.ready && !preflight.initial_sync_completed;
+
+  return (
+    <div
+      className={`lark-permission-status ${preflight.ready ? "ready" : "requires-action"}`}
+      aria-label="飞书同步权限预检"
+    >
+      <div className="lark-permission-head">
+        <div>
+          <strong>{stateLabels[preflight.state]}</strong>
+          <span>{preflight.message}</span>
+        </div>
+        <Badge tone={preflight.ready ? "mint" : blocked ? "amber" : "coral"}>
+          {preflight.ready ? "可同步" : blocked ? "首次同步已阻止" : "警告"}
+        </Badge>
+      </div>
+      {preflight.required_scopes.length ? (
+        <p>
+          最小只读 scope：<code>{preflight.required_scopes.join(" / ")}</code>
+        </p>
+      ) : null}
+      {preflight.missing_scopes.length ? (
+        <p>
+          缺失 scope：<code>{preflight.missing_scopes.join(" / ")}</code>
+        </p>
+      ) : null}
+      {preflight.authorization_command ? (
+        <p>
+          请在终端执行：<code>{preflight.authorization_command}</code>
+        </p>
+      ) : null}
+      {!preflight.ready && preflight.initial_sync_completed ? (
+        <p>已有成功同步记录，本次仅提示警告；各来源仍按原有失败语义执行。</p>
+      ) : null}
+      <button
+        className="secondary-button"
+        disabled={checking}
+        onClick={onRetry}
+        type="button"
+      >
+        <RefreshCw className={checking ? "spin" : ""} size={14} />
+        {checking ? "检查中…" : "重新检查权限"}
+      </button>
     </div>
   );
 }
@@ -1799,6 +1863,20 @@ function SettingsPage() {
     "/api/sync/lark/status",
     EMPTY_SYNC_STATUS
   );
+  const larkPermissionPreflight = useApi<LarkPermissionPreflight>(
+    "/api/sync/lark/preflight",
+    {
+      state: "check_failed",
+      ready: false,
+      required_scopes: [],
+      granted_scopes: [],
+      missing_scopes: [],
+      checked_at: "",
+      initial_sync_completed: false,
+      message: "正在检查飞书同步权限。",
+      authorization_command: null
+    }
+  );
   const {
     data: meegoStatus,
     error: meegoStatusError,
@@ -1871,6 +1949,14 @@ function SettingsPage() {
     setMessage("");
     void reloadSyncStatus();
     try {
+      const preflight = await api<LarkPermissionPreflight>(
+        "/api/sync/lark/preflight"
+      );
+      if (!preflight.ready && !preflight.initial_sync_completed) {
+        setMessage(preflight.message);
+        await larkPermissionPreflight.reload();
+        return;
+      }
       const status = await api<SyncStatus>("/api/sync/lark", { method: "POST" });
       const failed = status.results.filter((result) => !result.ok);
       if (failed.some((result) => result.issue?.requires_action)) {
@@ -1880,7 +1966,11 @@ function SettingsPage() {
       } else {
         setMessage("只读同步完成。");
       }
-      await Promise.all([config.reload(), reloadSyncStatus()]);
+      await Promise.all([
+        config.reload(),
+        reloadSyncStatus(),
+        larkPermissionPreflight.reload()
+      ]);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2130,7 +2220,7 @@ function SettingsPage() {
   return (
     <>
       <PageHeader eyebrow="Local control" title="Settings" description="人工内容由 Markdown 管理；同步、分析和审核状态保存在本机 SQLite。" />
-      <ErrorBanner message={config.error ?? people.error ?? diagnostics.error ?? markdownStatus.error ?? syncStatusError ?? meegoStatusError ?? agentRepositories.error} />
+      <ErrorBanner message={config.error ?? people.error ?? diagnostics.error ?? markdownStatus.error ?? syncStatusError ?? larkPermissionPreflight.error ?? meegoStatusError ?? agentRepositories.error} />
       {message && <div className="info-banner">{message}</div>}
       <div className="settings-grid">
         <Section title="Agent workspaces" subtitle="人工 Loop 允许使用的本地 Git 仓库或普通目录">
@@ -2159,8 +2249,23 @@ function SettingsPage() {
               <strong>{liveStatus.results.reduce((sum, result) => sum + (result.analysis_failed ?? 0), 0)}</strong>
             </div>
           </div>
+          <LarkPermissionStatus
+            checking={larkPermissionPreflight.loading}
+            onRetry={() => void larkPermissionPreflight.reload()}
+            preflight={larkPermissionPreflight.data}
+          />
           <LarkSyncIssues status={liveStatus} />
-          <button className="primary-button full-button" disabled={syncing || liveStatus.running} onClick={syncLark}>
+          <button
+            className="primary-button full-button"
+            disabled={
+              syncing ||
+              liveStatus.running ||
+              larkPermissionPreflight.loading ||
+              (!larkPermissionPreflight.data.ready &&
+                !larkPermissionPreflight.data.initial_sync_completed)
+            }
+            onClick={syncLark}
+          >
             <RefreshCw className={syncing || liveStatus.running ? "spin" : ""} size={17} />
             {syncing || liveStatus.running ? "正在同步…" : "立即只读同步"}
           </button>

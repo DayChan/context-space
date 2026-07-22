@@ -234,6 +234,25 @@ export interface SyncStatus {
   progress: SyncProgress | null;
 }
 
+export type LarkPermissionPreflightState =
+  | "ready"
+  | "cli_missing"
+  | "authentication_required"
+  | "missing_permissions"
+  | "check_failed";
+
+export interface LarkPermissionPreflight {
+  state: LarkPermissionPreflightState;
+  ready: boolean;
+  required_scopes: string[];
+  granted_scopes: string[];
+  missing_scopes: string[];
+  checked_at: string;
+  initial_sync_completed: boolean;
+  message: string;
+  authorization_command: string | null;
+}
+
 export type SyncPhase =
   | "collecting"
   | "analyzing"

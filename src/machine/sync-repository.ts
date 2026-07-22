@@ -89,6 +89,14 @@ export class SyncRepository {
       .run(source, cursorAt, updatedAt);
   }
 
+  hasSuccessfulRun(): boolean {
+    return Boolean(
+      this.database.connection
+        .prepare("SELECT 1 FROM sync_runs WHERE status = 'succeeded' LIMIT 1")
+        .get()
+    );
+  }
+
   latestRun(): StoredSyncRun | null {
     const run = this.database.connection
       .prepare("SELECT * FROM sync_runs ORDER BY started_at DESC LIMIT 1")

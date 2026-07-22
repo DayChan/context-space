@@ -8,6 +8,7 @@ import type {
   AgentRepository,
   AgentSession,
   LeaderConfig,
+  LarkPermissionPreflight,
   Overview,
   OpenSpecChangeSummary,
   OpenSpecReadiness,
@@ -237,6 +238,7 @@ let selectedSyncSchedule = {
   unit: "hours" as "minutes" | "hours"
 };
 let larkStatus: SyncStatus = EMPTY_SYNC_STATUS;
+let larkPermissionPreflight: LarkPermissionPreflight;
 let meegoConfig: MeegoConfig = {
   enabled: false,
   qTagTimelineEnabled: false,
@@ -336,6 +338,27 @@ beforeEach(() => {
   selectedWorkerCount = 1;
   selectedSyncSchedule = { enabled: false, interval: 1, unit: "hours" };
   larkStatus = EMPTY_SYNC_STATUS;
+  larkPermissionPreflight = {
+    state: "ready",
+    ready: true,
+    required_scopes: [
+      "auth:user.id:read",
+      "search:message",
+      "calendar:calendar.event:read",
+      "task:task:read"
+    ],
+    granted_scopes: [
+      "auth:user.id:read",
+      "search:message",
+      "calendar:calendar.event:read",
+      "task:task:read"
+    ],
+    missing_scopes: [],
+    checked_at: "2026-07-22T00:00:00.000Z",
+    initial_sync_completed: false,
+    message: "飞书同步所需权限已就绪。",
+    authorization_command: null
+  };
   meegoConfig = {
     enabled: false,
     qTagTimelineEnabled: false,
@@ -532,6 +555,9 @@ beforeEach(() => {
           state: "accepted",
           documentId: confirmed ? `knowledge_${confirmed.id}` : null
         });
+      }
+      if (url === "/api/sync/lark/preflight") {
+        return jsonResponse(larkPermissionPreflight);
       }
       if (url === "/api/sync/lark/status") return jsonResponse(larkStatus);
       if (url === "/api/sync/lark") return jsonResponse(larkStatus);
@@ -1497,6 +1523,93 @@ describe("Context Space workbench", () => {
     expect(
       await screen.findByText("同步已完成，但存在需要处理的飞书权限或认证问题，请查看下方提醒。")
     ).toBeInTheDocument();
+  });
+
+  it("blocks the first sync and shows the minimal authorization command until permissions are ready", async () => {
+    larkPermissionPreflight = {
+      ...larkPermissionPreflight,
+      state: "missing_permissions",
+      ready: false,
+      granted_scopes: ["auth:user.id:read"],
+      missing_scopes: [
+        "search:message",
+        "calendar:calendar.event:read",
+        "task:task:read"
+      ],
+      message: "飞书同步缺少必要权限。",
+      authorization_command:
+        'lark-cli auth login --scope "search:message calendar:calendar.event:read task:task:read"'
+    };
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+        initialEntries={["/settings"]}
+      >
+        <AppView />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("缺少权限")).toBeInTheDocument();
+    expect(screen.getByText("首次同步已阻止")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "auth:user.id:read / search:message / calendar:calendar.event:read / task:task:read"
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'lark-cli auth login --scope "search:message calendar:calendar.event:read task:task:read"'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "立即只读同步" })
+    ).toBeDisabled();
+
+    larkPermissionPreflight = {
+      ...larkPermissionPreflight,
+      state: "ready",
+      ready: true,
+      granted_scopes: [...larkPermissionPreflight.required_scopes],
+      missing_scopes: [],
+      message: "飞书同步所需权限已就绪。",
+      authorization_command: null
+    };
+    await user.click(screen.getByRole("button", { name: "重新检查权限" }));
+    expect(await screen.findByText("权限已就绪")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "立即只读同步" })
+    ).toBeEnabled();
+  });
+
+  it("warns without disabling sync when permissions are missing after a successful sync", async () => {
+    larkPermissionPreflight = {
+      ...larkPermissionPreflight,
+      state: "missing_permissions",
+      ready: false,
+      granted_scopes: ["auth:user.id:read"],
+      missing_scopes: ["search:message"],
+      initial_sync_completed: true,
+      message: "飞书同步缺少必要权限。",
+      authorization_command:
+        'lark-cli auth login --scope "search:message"'
+    };
+    render(
+      <MemoryRouter
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+        initialEntries={["/settings"]}
+      >
+        <AppView />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("警告")).toBeInTheDocument();
+    expect(
+      screen.getByText(/已有成功同步记录，本次仅提示警告/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "立即只读同步" })
+    ).toBeEnabled();
   });
 
   it("shows CLI installation guidance when Lark or Meego executables are missing", async () => {

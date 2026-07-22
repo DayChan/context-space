@@ -8,6 +8,11 @@ import type {
   ProviderAnalysisResponse
 } from "../src/analysis/contracts";
 import type { CommandRunner } from "../src/adapters/lark/runner";
+import {
+  REQUIRED_LARK_SYNC_SCOPES,
+  type LarkPermissionChecker,
+  type LarkPermissionProbe
+} from "../src/adapters/lark/permissions";
 import { createTodoMetadata } from "../src/core/todo";
 import type {
   NormalizedSourceRecord,
@@ -15,6 +20,7 @@ import type {
   SourceMetadata
 } from "../src/core/types";
 import { personIdForIdentity } from "../src/core/people";
+import { SyncRepository } from "../src/machine";
 import {
   createConfiguredLogger,
   type Logger,
@@ -23,7 +29,10 @@ import {
 import { createApp } from "../src/server/app";
 
 class EmptyRunner implements CommandRunner {
+  readonly calls: string[][] = [];
+
   async run(args: string[]): Promise<unknown> {
+    this.calls.push(args);
     if (args[0] === "contact") return { open_id: "ou_self", name: "Me" };
     if (args[0] === "im") return { messages: [] };
     if (args[0] === "calendar") return { events: [] };
@@ -31,6 +40,34 @@ class EmptyRunner implements CommandRunner {
     return {};
   }
 }
+
+function readyPermissionProbe(): LarkPermissionProbe {
+  return {
+    state: "ready",
+    ready: true as const,
+    required_scopes: [...REQUIRED_LARK_SYNC_SCOPES],
+    granted_scopes: [...REQUIRED_LARK_SYNC_SCOPES],
+    missing_scopes: [],
+    checked_at: "2026-07-22T00:00:00.000Z",
+    message: "飞书同步所需权限已就绪。",
+    authorization_command: null
+  };
+}
+
+class ApiPermissionChecker implements LarkPermissionChecker {
+  calls = 0;
+  result: Awaited<ReturnType<LarkPermissionChecker["check"]>> =
+    readyPermissionProbe();
+
+  async check() {
+    this.calls += 1;
+    return this.result;
+  }
+}
+
+const readyLarkPermissions: LarkPermissionChecker = {
+  check: async () => readyPermissionProbe()
+};
 
 class ApiAnalysisProvider implements AnalysisProvider {
   calls = 0;
@@ -62,6 +99,8 @@ describe("local API", () => {
   let sdkProvider: ApiAnalysisProvider;
   let execProvider: ApiAnalysisProvider;
   let logger: Logger;
+  let permissionChecker: ApiPermissionChecker;
+  let commandRunner: EmptyRunner;
   let logEntries: Array<Record<string, unknown>>;
   let csrfToken: string;
 
@@ -113,9 +152,12 @@ describe("local API", () => {
       stderr: (line) =>
         logEntries.push(JSON.parse(line) as Record<string, unknown>)
     });
+    permissionChecker = new ApiPermissionChecker();
+    commandRunner = new EmptyRunner();
     context = await createApp({
       workspaceRoot: root,
-      commandRunner: new EmptyRunner(),
+      commandRunner,
+      larkPermissionChecker: permissionChecker,
       analysisProviders: [sdkProvider, execProvider],
       environment: {},
       logger
@@ -745,6 +787,15 @@ describe("local API", () => {
   });
 
   it("runs a read-only synchronization through the injected runner", async () => {
+    const preflight = await request(context.app)
+      .get("/api/sync/lark/preflight")
+      .expect(200);
+    expect(preflight.body).toMatchObject({
+      state: "ready",
+      ready: true,
+      initial_sync_completed: false,
+      missing_scopes: []
+    });
     const before = await request(context.app)
       .get("/api/sync/lark/status")
       .expect(200);
@@ -763,6 +814,44 @@ describe("local API", () => {
       .get("/api/sync/lark/status")
       .expect(200);
     expect(after.body.progress.phase).toBe("completed");
+  });
+
+  it("blocks the first API synchronization before any Lark source call when permissions are missing", async () => {
+    permissionChecker.result = {
+      ...readyPermissionProbe(),
+      state: "missing_permissions",
+      ready: false,
+      granted_scopes: ["auth:user.id:read"],
+      missing_scopes: [
+        "search:message",
+        "calendar:calendar.event:read",
+        "task:task:read"
+      ],
+      message: "飞书同步缺少必要权限。",
+      authorization_command:
+        'lark-cli auth login --scope "search:message calendar:calendar.event:read task:task:read"'
+    };
+
+    const preflight = await request(context.app)
+      .get("/api/sync/lark/preflight")
+      .expect(200);
+    expect(preflight.body).toMatchObject({
+      state: "missing_permissions",
+      initial_sync_completed: false
+    });
+
+    const response = await authorized(
+      request(context.app).post("/api/sync/lark")
+    ).expect(409);
+    expect(response.body.preflight).toMatchObject({
+      ready: false,
+      initial_sync_completed: false
+    });
+    expect(commandRunner.calls).toHaveLength(0);
+    expect(new SyncRepository(context.runtime.database).latestRun()).toBeNull();
+    expect(context.runtime.sync.getStatus()).toEqual(
+      expect.objectContaining({ running: false, started_at: null })
+    );
   });
 
   it("persists periodic read-only synchronization configuration", async () => {
@@ -852,6 +941,7 @@ describe("local API", () => {
     const locked = await createApp({
       workspaceRoot: root,
       commandRunner: new EmptyRunner(),
+      larkPermissionChecker: readyLarkPermissions,
       analysisProviders: [
         new ApiAnalysisProvider("codex-sdk"),
         new ApiAnalysisProvider("codex-exec")

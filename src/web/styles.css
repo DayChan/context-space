@@ -418,6 +418,15 @@ a { color: inherit; text-decoration: none; }
 .sync-summary div { padding: 10px; display: flex; flex-direction: column; border-radius: 8px; background: #f0eee8; }
 .sync-summary span { color: #999; font-size: 8px; }
 .sync-summary strong { margin-top: 3px; font-size: 10px; }
+.lark-permission-status { margin-top: 12px; padding: 10px; border: 1px solid #c9dfd1; border-radius: 9px; color: #365c48; background: #eef7f1; }
+.lark-permission-status.requires-action { border-color: #e6d099; color: #705b2d; background: #fbf3d9; }
+.lark-permission-head { display: flex; align-items: flex-start; gap: 8px; }
+.lark-permission-head > div:first-child { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.lark-permission-head strong { font-size: 10px; }
+.lark-permission-head span { margin-top: 3px; font-size: 8px; line-height: 1.5; }
+.lark-permission-status p { margin: 7px 0 0; font-size: 8px; line-height: 1.55; overflow-wrap: anywhere; }
+.lark-permission-status code { padding: 1px 3px; border-radius: 3px; background: rgb(255 255 255 / 55%); font-size: 8px; }
+.lark-permission-status .secondary-button { margin-top: 9px; }
 .lark-issue-list { margin-top: 12px; display: grid; gap: 8px; }
 .lark-issue { padding: 10px; border: 1px solid #edc8bd; border-radius: 9px; color: #795047; background: var(--coral-soft); }
 .lark-issue.requires-action { border-color: #e6d099; color: #705b2d; background: #fbf3d9; }

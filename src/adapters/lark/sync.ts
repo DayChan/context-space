@@ -5,6 +5,7 @@ import type { NormalizedSourceRecord } from "../../core/types";
 import { personIdForIdentity } from "../../core/people";
 import {
   EMPTY_SYNC_STATUS,
+  type LarkPermissionPreflight,
   type SyncProgress,
   type SyncSourceResult,
   type SyncStatus,
@@ -19,6 +20,10 @@ import {
 import { hashStableValue } from "../../analysis/run-store";
 import { nullLogger, withLogContext, type Logger } from "../../logging";
 import { LarkAdapter, type LarkSyncSource, splitWindows } from "./adapter";
+import {
+  LarkPermissionPreflightError,
+  type LarkPermissionChecker
+} from "./permissions";
 
 const DEFAULT_MAX_MESSAGE_PAGES_PER_WINDOW = 200;
 const DEFAULT_BACKFILL_DAYS = 1;
@@ -109,6 +114,7 @@ export function synchronizationStart(input: {
 
 export class LarkSyncService {
   private status: SyncStatus = { ...EMPTY_SYNC_STATUS };
+  private permissionPreflight: LarkPermissionPreflight | null = null;
   private readonly logger: Logger;
 
   constructor(
@@ -117,6 +123,7 @@ export class LarkSyncService {
     private readonly syncRepository: SyncRepository,
     private readonly jobs: AnalysisJobRepository,
     private readonly adapter: LarkAdapter,
+    private readonly permissionChecker: LarkPermissionChecker,
     private readonly getAnalysisJobConfig: () => Promise<PersistentAnalysisJobConfig>,
     logger: Logger = nullLogger,
     private readonly defaultOptions: DefaultSyncOptions = {}
@@ -126,6 +133,26 @@ export class LarkSyncService {
 
   getStatus(): SyncStatus {
     return this.status;
+  }
+
+  getPermissionPreflight(): LarkPermissionPreflight | null {
+    return this.permissionPreflight;
+  }
+
+  async checkPermissions(): Promise<LarkPermissionPreflight> {
+    const checked = await this.permissionChecker.check();
+    this.permissionPreflight = {
+      ...checked,
+      initial_sync_completed: this.syncRepository.hasSuccessfulRun()
+    };
+    this.logger.info("lark.permissions.checked", {
+      state: this.permissionPreflight.state,
+      ready: this.permissionPreflight.ready,
+      initial_sync_completed: this.permissionPreflight.initial_sync_completed,
+      granted_scope_count: this.permissionPreflight.granted_scopes.length,
+      missing_scopes: this.permissionPreflight.missing_scopes
+    });
+    return this.permissionPreflight;
   }
 
   async loadStatus(): Promise<SyncStatus> {
@@ -180,6 +207,20 @@ export class LarkSyncService {
   async sync(options: SyncOptions = {}): Promise<SyncStatus> {
     if (this.status.running) {
       throw new Error("A Lark synchronization is already running");
+    }
+    const preflight = await this.checkPermissions();
+    if (!preflight.ready && !preflight.initial_sync_completed) {
+      this.logger.warn("lark.sync.preflight.blocked", {
+        state: preflight.state,
+        missing_scopes: preflight.missing_scopes
+      });
+      throw new LarkPermissionPreflightError(preflight);
+    }
+    if (!preflight.ready) {
+      this.logger.warn("lark.sync.preflight.warning", {
+        state: preflight.state,
+        missing_scopes: preflight.missing_scopes
+      });
     }
     this.status = {
       running: true,

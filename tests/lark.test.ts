@@ -9,6 +9,11 @@ import type {
 } from "../src/analysis/contracts";
 import { LarkAdapter } from "../src/adapters/lark/adapter";
 import {
+  LarkCliPermissionChecker,
+  REQUIRED_LARK_SYNC_SCOPES,
+  type LarkPermissionChecker
+} from "../src/adapters/lark/permissions";
+import {
   normalizeMessages,
   normalizeTasks
 } from "../src/adapters/lark/normalize";
@@ -44,10 +49,18 @@ import {
 
 const testDatabases: MachineDatabase[] = [];
 
+async function executable(root: string, name: string, body: string): Promise<string> {
+  const filename = path.join(root, name);
+  await writeFile(filename, `#!/usr/bin/env node\n${body}\n`, "utf8");
+  await chmod(filename, 0o755);
+  return filename;
+}
+
 async function createTestSync(
   root: string,
   adapter: LarkAdapter,
-  logger?: Logger
+  logger?: Logger,
+  permissionChecker: LarkPermissionChecker = readyPermissionChecker()
 ): Promise<LarkSyncService> {
   const database = await openMachineDatabase(root);
   testDatabases.push(database);
@@ -57,6 +70,7 @@ async function createTestSync(
     new SyncRepository(database),
     new AnalysisJobRepository(database),
     adapter,
+    permissionChecker,
     async () => ({
       analysis: DEFAULT_ANALYSIS_CONFIG,
       timezone: "Asia/Singapore",
@@ -64,6 +78,21 @@ async function createTestSync(
     }),
     logger
   );
+}
+
+function readyPermissionChecker(): LarkPermissionChecker {
+  return {
+    check: async () => ({
+      state: "ready",
+      ready: true,
+      required_scopes: [...REQUIRED_LARK_SYNC_SCOPES],
+      granted_scopes: [...REQUIRED_LARK_SYNC_SCOPES],
+      missing_scopes: [],
+      checked_at: "2026-07-22T00:00:00.000Z",
+      message: "飞书同步所需权限已就绪。",
+      authorization_command: null
+    })
+  };
 }
 
 function memoryLogger(root: string): {
@@ -297,6 +326,139 @@ describe("read-only Lark adapter", () => {
   afterEach(async () => {
     for (const database of testDatabases.splice(0)) database.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("checks the fixed minimum Lark scopes without business API calls", async () => {
+    const binary = await executable(
+      root,
+      "lark-cli-permissions-ready",
+      `process.stdout.write(JSON.stringify({ok:true,granted:${JSON.stringify(REQUIRED_LARK_SYNC_SCOPES)},missing:null}))`
+    );
+    const status = await new LarkCliPermissionChecker(binary).check();
+    expect(status).toMatchObject({
+      state: "ready",
+      ready: true,
+      missing_scopes: [],
+      authorization_command: null
+    });
+    expect(status.granted_scopes).toEqual(REQUIRED_LARK_SYNC_SCOPES);
+  });
+
+  it("returns only missing scopes in the manual authorization command", async () => {
+    const binary = await executable(
+      root,
+      "lark-cli-permissions-missing",
+      `process.stdout.write(JSON.stringify({ok:false,granted:["auth:user.id:read","task:task:read"],missing:["search:message","calendar:calendar.event:read"]}))`
+    );
+    await expect(new LarkCliPermissionChecker(binary).check()).resolves.toMatchObject({
+      state: "missing_permissions",
+      ready: false,
+      missing_scopes: ["search:message", "calendar:calendar.event:read"],
+      authorization_command:
+        'lark-cli auth login --scope "search:message calendar:calendar.event:read"'
+    });
+  });
+
+  it("classifies authentication, missing CLI, and invalid permission output", async () => {
+    const authBinary = await executable(
+      root,
+      "lark-cli-permissions-auth",
+      'process.stderr.write("token expired; please login"); process.exit(1)'
+    );
+    const invalidBinary = await executable(
+      root,
+      "lark-cli-permissions-invalid",
+      'process.stdout.write("not-json")'
+    );
+    await expect(new LarkCliPermissionChecker(authBinary).check()).resolves.toMatchObject({
+      state: "authentication_required",
+      ready: false
+    });
+    await expect(
+      new LarkCliPermissionChecker(path.join(root, "missing-lark-cli")).check()
+    ).resolves.toMatchObject({ state: "cli_missing", ready: false });
+    await expect(new LarkCliPermissionChecker(invalidBinary).check()).resolves.toMatchObject({
+      state: "check_failed",
+      ready: false
+    });
+  });
+
+  it("blocks the first sync before creating runs, cursors, jobs, or business calls", async () => {
+    const runner = new FakeRunner();
+    const missingChecker: LarkPermissionChecker = {
+      check: async () => ({
+        state: "missing_permissions",
+        ready: false,
+        required_scopes: [...REQUIRED_LARK_SYNC_SCOPES],
+        granted_scopes: ["auth:user.id:read", "task:task:read"],
+        missing_scopes: ["search:message", "calendar:calendar.event:read"],
+        checked_at: "2026-07-22T00:00:00.000Z",
+        message: "飞书同步缺少 2 项权限。",
+        authorization_command:
+          'lark-cli auth login --scope "search:message calendar:calendar.event:read"'
+      })
+    };
+    const sync = await createTestSync(
+      root,
+      new LarkAdapter(runner),
+      undefined,
+      missingChecker
+    );
+
+    await expect(sync.sync()).rejects.toMatchObject({
+      name: "LarkPermissionPreflightError",
+      preflight: {
+        initial_sync_completed: false,
+        missing_scopes: ["search:message", "calendar:calendar.event:read"]
+      }
+    });
+
+    const database = testDatabases.at(-1)!;
+    expect(runner.calls).toHaveLength(0);
+    expect(new SyncRepository(database).latestRun()).toBeNull();
+    expect(new SyncRepository(database).getCursor("self")).toBeNull();
+    expect(new AnalysisJobRepository(database).counts().queued).toBe(0);
+  });
+
+  it("warns but preserves source-level sync after a complete successful run", async () => {
+    const runner = new FakeRunner();
+    const missingChecker: LarkPermissionChecker = {
+      check: async () => ({
+        state: "missing_permissions",
+        ready: false,
+        required_scopes: [...REQUIRED_LARK_SYNC_SCOPES],
+        granted_scopes: ["auth:user.id:read", "search:message", "task:task:read"],
+        missing_scopes: ["calendar:calendar.event:read"],
+        checked_at: "2026-07-22T00:00:00.000Z",
+        message: "飞书同步缺少 1 项权限。",
+        authorization_command:
+          'lark-cli auth login --scope "calendar:calendar.event:read"'
+      })
+    };
+    const sync = await createTestSync(
+      root,
+      new LarkAdapter(runner),
+      undefined,
+      missingChecker
+    );
+    const repository = new SyncRepository(testDatabases.at(-1)!);
+    repository.startRun("sync_previous", "2026-07-21T00:00:00.000Z");
+    repository.finishRun(
+      "sync_previous",
+      "succeeded",
+      null,
+      "2026-07-21T00:01:00.000Z"
+    );
+
+    await expect(sync.sync({ now: new Date("2026-07-22T00:00:00.000Z") })).resolves.toMatchObject({
+      last_error: null
+    });
+    expect(runner.calls.length).toBeGreaterThan(0);
+    expect(sync.getPermissionPreflight()).toMatchObject({
+      ready: false,
+      initial_sync_completed: true,
+      missing_scopes: ["calendar:calendar.event:read"]
+    });
   });
 
   it("adds user identity and rejects mutation commands", () => {

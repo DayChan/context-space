@@ -51,6 +51,17 @@ CONTEXT_SPACE_ROOT=/absolute/private/path npm run dev
 
 ## 飞书同步
 
+首次同步前，Context Space 会通过 `lark-cli auth check` 检查当前用户是否具备以下最小只读 scope：
+
+- `auth:user.id:read`
+- `search:message`
+- `calendar:calendar.event:read`
+- `task:task:read`
+
+如果 CLI 未安装、用户未登录或 scope 不完整，Settings 会在读取任何飞书业务数据前阻止首次同步，并展示只包含缺失 scope 的 `lark-cli auth login --scope "..."` 命令。请由用户在终端确认并执行授权，再点击“重新检查权限”；系统不会自动登录、授权或扩大权限范围。权限状态也可通过 `GET /api/sync/lark/preflight` 查询。
+
+首次完整同步成功后，如果权限被撤销，Settings 会继续显示警告，但不会全局阻断同步；各来源仍按实际 API 结果独立成功或失败，失败来源不会推进检查点。scope 检查不代表用户必然拥有某个具体日历等资源的访问角色，这类资源级权限仍由业务请求结果判断。
+
 使用 Settings 页面触发同步。直接调用修改型 API 时，先读取 CSRF Token：
 
 ```bash

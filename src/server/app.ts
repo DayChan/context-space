@@ -44,6 +44,11 @@ import { ANALYSIS_SCHEMA_VERSION } from "../analysis/schema";
 import { LarkAdapter } from "../adapters/lark/adapter";
 import { LarkCliCommandRunner, type CommandRunner } from "../adapters/lark/runner";
 import {
+  LarkCliPermissionChecker,
+  LarkPermissionPreflightError,
+  type LarkPermissionChecker
+} from "../adapters/lark/permissions";
+import {
   LarkSyncService,
   syncOptionsFromEnvironment
 } from "../adapters/lark/sync";
@@ -258,6 +263,7 @@ export interface Runtime {
 export interface CreateAppOptions {
   workspaceRoot: string;
   commandRunner?: CommandRunner;
+  larkPermissionChecker?: LarkPermissionChecker;
   meegleCommandRunner?: MeegleCommandRunner;
   agentRuntime?: AgentRuntime;
   workspaceOpener?: WorkspaceOpener;
@@ -645,12 +651,16 @@ export async function createApp(options: CreateAppOptions): Promise<{
   const runner =
     options.commandRunner ??
     new LarkCliCommandRunner("lark-cli", logger);
+  const larkPermissionChecker =
+    options.larkPermissionChecker ??
+    new LarkCliPermissionChecker("lark-cli", { environment });
   const sync = new LarkSyncService(
     database,
     machineContext,
     syncRepository,
     analysisJobs,
     new LarkAdapter(runner),
+    larkPermissionChecker,
     async (): Promise<PersistentAnalysisJobConfig> => ({
       analysis: (await analysisConfig.getEffective()).config,
       timezone:
@@ -1252,6 +1262,21 @@ export async function createApp(options: CreateAppOptions): Promise<{
     try {
       const status = await sync.sync();
       response.json(status);
+    } catch (error) {
+      if (error instanceof LarkPermissionPreflightError) {
+        response.status(409).json({
+          error: error.message,
+          preflight: error.preflight
+        });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  app.get("/api/sync/lark/preflight", async (_request, response, next) => {
+    try {
+      response.json(await sync.checkPermissions());
     } catch (error) {
       next(error);
     }
