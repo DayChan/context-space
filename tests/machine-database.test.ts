@@ -113,6 +113,10 @@ describe("MachineDatabase", () => {
     applyMachineMigrations(database);
 
     expect(
+      database.prepare("SELECT agent, model FROM agent_sessions WHERE id = 'session_existing'").get()
+    ).toEqual({ agent: "codex", model: null });
+
+    expect(
       database.prepare(
         "SELECT id, sequence FROM agent_messages ORDER BY sequence"
       ).all()

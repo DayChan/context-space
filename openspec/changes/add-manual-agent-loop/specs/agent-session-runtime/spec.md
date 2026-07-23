@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: 人工创建 Agent 会话
-系统 SHALL 只在用户显式提交启动请求后，根据一个 Todo 或未完成 Meego 来源、一个已注册仓库、可编辑任务说明和工作模式创建 Agent 会话；系统 MUST NOT 根据同步、优先级或自动化元数据自动启动会话。
+系统 SHALL 只在用户显式提交启动请求后，根据一个 Todo 或未完成 Meego 来源、一个已注册仓库、可编辑任务说明、工作模式、Agent 类型和可空模型覆盖创建 Agent 会话；系统 MUST NOT 根据同步、优先级或自动化元数据自动启动会话。
 
 #### Scenario: 从开放 Todo 启动
 - **WHEN** 用户确认开放且非等待他人的 Todo、任务说明、仓库和工作模式
@@ -10,6 +10,21 @@
 #### Scenario: 同步完成不自动启动
 - **WHEN** Lark 或 Meego 同步创建或更新了可执行事项
 - **THEN** 系统不创建 Agent 会话且不调用 Agent Runtime
+
+### Requirement: 可选择且会话级固定的 Agent 与模型
+系统 SHALL 支持 Codex、TraeX 和 Claude Agent，并在会话创建时持久化所选 Agent 与可空模型覆盖。未提供模型时 Runtime MUST 使用对应 Agent 的默认模型；系统 MUST NOT 将一个 Agent 的会话 ID 交给另一 Agent 恢复。
+
+#### Scenario: 使用 Agent 默认模型
+- **WHEN** 用户选择 Claude 且模型输入为空
+- **THEN** 系统创建 Claude 会话且调用 CLI 时不传 `--model`
+
+#### Scenario: 覆盖模型
+- **WHEN** 用户选择 TraeX 并填写模型名称
+- **THEN** 系统在首轮和恢复轮次中使用该模型覆盖
+
+#### Scenario: 查看历史会话
+- **WHEN** 用户打开已有 Agent 会话
+- **THEN** Loop 展示创建时固化的 Agent、模型或“默认模型”以及对应 Session ID
 
 ### Requirement: 持久多轮对话
 系统 SHALL 为每个会话持久化用户消息、Agent 消息、Turn、标准化事件和 Codex Thread ID；同一会话后续消息 MUST 串行恢复同一 Thread，不得并发执行两个 Turn。

@@ -335,6 +335,7 @@ export interface MeegoSyncStatus {
 
 export type AgentWorkspaceMode = "read_only" | "isolated_worktree";
 export type AgentWorkflowKind = "direct" | "openspec";
+export type AgentKind = "codex" | "traex" | "claude";
 export type AgentSessionStatus = "active" | "completed" | "cancelled" | "failed";
 export type AgentAttention =
   | "none"
@@ -422,6 +423,8 @@ export interface AgentSession {
   sourceId: string;
   repositoryId: string;
   repository?: AgentRepository;
+  agent: AgentKind;
+  model: string | null;
   mode: AgentWorkspaceMode;
   workflowKind: AgentWorkflowKind;
   workspacePath: string;

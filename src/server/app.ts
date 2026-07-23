@@ -8,7 +8,7 @@ import {
   AgentCoordinator,
   AgentLoopService,
   AgentSessionEvents,
-  CodexAgentRuntime,
+  MultiAgentRuntime,
   GitWorkspaceService,
   InvalidAgentRepositoryError,
   MacWorkspaceOpener,
@@ -207,10 +207,15 @@ const reanalysisSchema = z.union([
 ]);
 
 const registerAgentRepositorySchema = z.object({ path: z.string().min(1).max(4_096) }).strict();
+const agentReadinessQuerySchema = z.object({
+  agent: z.enum(["codex", "traex", "claude"]).default("codex")
+});
 const startAgentSessionSchema = z.object({
   sourceKind: z.enum(["todo", "meego"]),
   sourceId: z.string().min(1),
   repositoryId: z.string().min(1),
+  agent: z.enum(["codex", "traex", "claude"]).default("codex"),
+  model: z.string().trim().min(1).max(200).nullable().default(null),
   mode: z.enum(["read_only", "isolated_worktree"]),
   workflow: z.union([
     z.object({ kind: z.literal("direct") }).strict(),
@@ -690,7 +695,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
   const agentEvents = new AgentSessionEvents();
   const agentCoordinator = new AgentCoordinator(
     agentStore,
-    options.agentRuntime ?? new CodexAgentRuntime(),
+    options.agentRuntime ?? new MultiAgentRuntime(),
     agentEvents,
     logger
   );
@@ -1380,7 +1385,10 @@ export async function createApp(options: CreateAppOptions): Promise<{
   });
 
   app.get("/api/agent/repositories/:id/openspec-readiness", (request, response, next) => {
-    try { response.json(agentLoop.openSpecReadiness(request.params.id)); }
+    try {
+      const { agent } = agentReadinessQuerySchema.parse(request.query);
+      response.json(agentLoop.openSpecReadiness(request.params.id, agent));
+    }
     catch (error) { next(error); }
   });
 

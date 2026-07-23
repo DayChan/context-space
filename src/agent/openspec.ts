@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { AgentRequestError } from "../core/agent-errors";
 import type {
+  AgentKind,
   OpenSpecChangeSummary,
   OpenSpecReadiness,
   OpenSpecWorkflow
@@ -15,7 +16,16 @@ import type {
 const execFileAsync = promisify(execFile);
 const changeNamePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const schemaNamePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const agentSkillRoots = [".codex", ".agents"] as const;
+const agentSkillRoots: Record<AgentKind, readonly string[]> = {
+  codex: [".codex", ".agents"],
+  traex: [".trae", ".agents"],
+  claude: [".claude", ".agents"]
+};
+const openSpecTools: Record<AgentKind, string> = {
+  codex: "codex",
+  traex: "trae",
+  claude: "claude"
+};
 
 export function isOpenSpecChangeName(value: string): boolean {
   return changeNamePattern.test(value);
@@ -29,7 +39,9 @@ function supportedCommand(args: string[]): boolean {
   if (args.length === 2 && args[0] === "list" && args[1] === "--json") return true;
   if (args.length === 4 && args[0] === "status" && args[1] === "--change" && isOpenSpecChangeName(args[2]) && args[3] === "--json") return true;
   if (args.length === 4 && args[0] === "schema" && args[1] === "which" && schemaNamePattern.test(args[2]) && args[3] === "--json") return true;
-  return args.length === 6 && args[0] === "init" && args[1] === "." && args[2] === "--tools" && args[3] === "codex" && args[4] === "--force" && args[5] === "--profile=custom";
+  return args.length === 6 && args[0] === "init" && args[1] === "." && args[2] === "--tools"
+    && Object.values(openSpecTools).includes(args[3])
+    && args[4] === "--force" && args[5] === "--profile=custom";
 }
 
 export class NodeOpenSpecCommandRunner implements OpenSpecCommandRunner {
@@ -99,25 +111,26 @@ function parseJson<T>(value: string, schema: z.ZodType<T>, label: string): T {
 export class OpenSpecInspector {
   constructor(private readonly runner: OpenSpecCommandRunner = new NodeOpenSpecCommandRunner()) {}
 
-  readiness(workspacePath: string): OpenSpecReadiness {
+  readiness(workspacePath: string, agent: AgentKind = "codex"): OpenSpecReadiness {
     const initialized = (
       existsSync(path.join(workspacePath, "openspec", "config.yaml"))
       || existsSync(path.join(workspacePath, "openspec", "config.yml"))
     ) && existsSync(path.join(workspacePath, "openspec", "changes"));
     const requiredSkills = ["openspec-explore", "openspec-new-change"];
-    const missingSkills = requiredSkills.filter((skill) => agentSkillRoots.every((root) => !existsSync(
+    const roots = agentSkillRoots[agent];
+    const missingSkills = requiredSkills.filter((skill) => roots.every((root) => !existsSync(
       path.join(workspacePath, root, "skills", skill, "SKILL.md")
     )));
     const missing = [
       ...(!initialized ? ["openspec"] : []),
-      ...missingSkills.map((skill) => `.codex/skills/${skill} 或 .agents/skills/${skill}`)
+      ...missingSkills.map((skill) => `${roots.map((root) => `${root}/skills/${skill}`).join(" 或 ")}`)
     ];
     return { initialized, skillsReady: missingSkills.length === 0, ready: missing.length === 0, missing };
   }
 
-  async initialize(workspacePath: string): Promise<OpenSpecReadiness> {
-    await this.runner.run(workspacePath, ["init", ".", "--tools", "codex", "--force", "--profile=custom"]);
-    const readiness = this.readiness(workspacePath);
+  async initialize(workspacePath: string, agent: AgentKind = "codex"): Promise<OpenSpecReadiness> {
+    await this.runner.run(workspacePath, ["init", ".", "--tools", openSpecTools[agent], "--force", "--profile=custom"]);
+    const readiness = this.readiness(workspacePath, agent);
     if (!readiness.ready) throw new AgentRequestError(`OpenSpec 初始化不完整：${readiness.missing.join("、")}`);
     return readiness;
   }

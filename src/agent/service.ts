@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { AgentConflictError, AgentRequestError } from "../core/agent-errors";
-import type { AgentSession, AgentWorkflowKind, AgentWorkspaceMode } from "../core/types";
+import type { AgentKind, AgentSession, AgentWorkflowKind, AgentWorkspaceMode } from "../core/types";
 import { AgentRepositoryStore } from "../machine";
 import { AgentCoordinator } from "./coordinator";
 import { GitWorkspaceService } from "./git-workspace";
 import { isOpenSpecChangeName, OpenSpecInspector } from "./openspec";
 
-function openSpecPrompt(prompt: string): string {
+function openSpecPrompt(prompt: string, agent: AgentKind): string {
   const trimmed = prompt.trim();
   return /^(?:\$|\/)openspec-explore(?:\s|$)/.test(trimmed)
     ? trimmed
-    : `$openspec-explore\n\n${trimmed}`;
+    : `${agent === "codex" ? "$" : "/"}openspec-explore\n\n${trimmed}`;
 }
 
 export class AgentLoopService {
@@ -32,8 +32,11 @@ export class AgentLoopService {
   async start(input: {
     title: string; sourceKind: "todo" | "meego"; sourceId: string;
     repositoryId: string; mode: AgentWorkspaceMode; prompt: string;
+    agent?: AgentKind; model?: string | null;
     workflowKind?: AgentWorkflowKind; initializeIfMissing?: boolean;
   }): Promise<AgentSession> {
+    const agent = input.agent ?? "codex";
+    const model = input.model ?? null;
     const registered = this.store.getRepository(input.repositoryId);
     if (!registered) throw new AgentRequestError("Agent 工作目录不存在");
     const current = await this.workspaces.inspectLocation(registered.path);
@@ -45,7 +48,7 @@ export class AgentLoopService {
     if (workflowKind === "openspec" && (input.mode !== "isolated_worktree" || repository.kind !== "git")) {
       throw new AgentRequestError("OpenSpec 工作流仅支持 Git 仓库的隔离开发模式");
     }
-    if (workflowKind === "openspec" && !this.openSpec.readiness(repository.path).ready && !input.initializeIfMissing) {
+    if (workflowKind === "openspec" && !this.openSpec.readiness(repository.path, agent).ready && !input.initializeIfMissing) {
       throw new AgentConflictError("仓库尚未完成 OpenSpec 与 Agent skills 初始化");
     }
     const sessionId = `session_${randomUUID()}`;
@@ -53,13 +56,15 @@ export class AgentLoopService {
       ? await this.workspaces.createWorktree(repository, sessionId, repository.headCommit)
       : { path: repository.path, branch: null, baseCommit: repository.headCommit };
     try {
-      if (workflowKind === "openspec" && !this.openSpec.readiness(workspace.path).ready) {
+      if (workflowKind === "openspec" && !this.openSpec.readiness(workspace.path, agent).ready) {
         if (!input.initializeIfMissing) throw new AgentConflictError("隔离工作区尚未完成 OpenSpec 初始化");
-        await this.openSpec.initialize(workspace.path);
+        await this.openSpec.initialize(workspace.path, agent);
       }
       const session = this.store.createSession({
         ...input,
-        prompt: workflowKind === "openspec" ? openSpecPrompt(input.prompt) : input.prompt,
+        agent,
+        model,
+        prompt: workflowKind === "openspec" ? openSpecPrompt(input.prompt, agent) : input.prompt,
         workflowKind,
         id: sessionId,
         workspacePath: workspace.path,
@@ -81,10 +86,10 @@ export class AgentLoopService {
     }
   }
 
-  openSpecReadiness(repositoryId: string) {
+  openSpecReadiness(repositoryId: string, agent: AgentKind = "codex") {
     const repository = this.store.getRepository(repositoryId);
     if (!repository) throw new AgentRequestError("Agent 工作目录不存在");
-    return this.openSpec.readiness(repository.path);
+    return this.openSpec.readiness(repository.path, agent);
   }
 
   async openSpecChanges(sessionId: string) {
@@ -103,7 +108,7 @@ export class AgentLoopService {
     if (!isOpenSpecChangeName(name)) throw new AgentRequestError("OpenSpec change 名称必须是 kebab-case");
     const normalizedDescription = description.trim();
     if (!normalizedDescription) throw new AgentRequestError("OpenSpec change 说明不能为空");
-    return this.send(sessionId, `$openspec-new-change ${name}\n\n${normalizedDescription}`);
+    return this.send(sessionId, `${session.agent === "codex" ? "$" : "/"}openspec-new-change ${name}\n\n${normalizedDescription}`);
   }
 
   private openSpecSession(id: string): AgentSession {

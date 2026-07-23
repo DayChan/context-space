@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AgentOutcome, AgentWorkspaceMode } from "../core/types";
+import type { AgentKind, AgentOutcome, AgentWorkspaceMode } from "../core/types";
 
 const agentConfirmationSchema = z.object({
   kind: z.enum(["decision", "action_approval", "workspace_upgrade"]),
@@ -55,6 +55,8 @@ export interface AgentRuntimeResult {
 }
 
 export interface AgentRuntimeInput {
+  agent: AgentKind;
+  model: string | null;
   threadId: string | null;
   workingDirectory: string;
   mode: AgentWorkspaceMode;

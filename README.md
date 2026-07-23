@@ -116,18 +116,20 @@ Settings 和 Meego 页面均可触发独立的手动只读同步。直接调用 
 
 ## 人工 Agent Loop
 
-Loop 当前是人工触发的本地 Agent 工作台，不是自动任务调度器。先在 Settings 的 “Agent workspaces” 中注册一个本地 Git 仓库或普通目录；绝对路径和以 `~/` 开头的当前用户主目录相对路径均可使用，系统会保存规范真实路径。随后可以从未完成且可执行的 Todo 或 Meego 条目点击 `Agent`，编辑任务说明并选择工作目录和模式：
+Loop 当前是人工触发的本地 Agent 工作台，不是自动任务调度器。先在 Settings 的 “Agent workspaces” 中注册一个本地 Git 仓库或普通目录；绝对路径和以 `~/` 开头的当前用户主目录相对路径均可使用，系统会保存规范真实路径。随后可以从未完成且可执行的 Todo 或 Meego 条目点击 `Agent`，编辑任务说明并选择 Agent、模型、工作目录和模式。
+
+支持 `Codex`、`TraeX` 和 `Claude`。模型是可选的自由文本覆盖：留空时不向 SDK/CLI 传 `--model`，由所选 Agent 使用自身默认模型。Agent 与模型在会话创建时固化；不同 Agent 的原生 Session ID 不兼容，需要切换 Agent 时应新建会话，而不是在已有对话中热切换。TraeX 和 Claude 需要本机已安装并完成对应 CLI 认证。
 
 - **只读分析**：直接以 Git 仓库根目录或普通目录运行，强制 `read-only` 沙箱，不创建分支或 worktree，适合调研、解释和代码审查。
 - **隔离开发**：固定启动瞬间的 HEAD 作为 `base_commit`，创建 `context-space/<session-id>` 分支和会话专属 worktree；Agent 的写权限只覆盖该 worktree。
 
 普通目录没有 Git HEAD，因此只能选择只读分析；服务端也会拒绝绕过 UI 提交的隔离开发请求。
 
-Git 隔离开发还可以启用 **OpenSpec 工作流**。启动面板会检查仓库中的 `openspec/` 配置与项目级 Agent skills；每个必需 skill 可以位于 `.codex/skills` 或 `.agents/skills`。缺失时只有用户明确点击“初始化并创建”才会先建立临时 worktree、执行受限的 `openspec init` 并创建会话。拒绝或初始化失败都会回滚临时分支和 worktree，不留下 Agent Session。该模式要求本机已安装 `openspec` CLI。
+Git 隔离开发还可以启用 **OpenSpec 工作流**。启动面板会按所选 Agent 检查仓库中的 `openspec/` 配置与项目级 skills（Codex 使用 `.codex/skills`，TraeX 使用 `.trae/skills`，Claude 使用 `.claude/skills`，三者均兼容 `.agents/skills`）。缺失时只有用户明确点击“初始化并创建”才会先建立临时 worktree、为所选 Agent 执行受限的 `openspec init` 并创建会话。拒绝或初始化失败都会回滚临时分支和 worktree，不留下 Agent Session。该模式要求本机已安装 `openspec` CLI。
 
-OpenSpec 会话的首轮说明会由服务端幂等添加 `$openspec-explore`。会话顶部按 change 的实际文件和 OpenSpec schema 展示 artifact DAG，区分已完成、可继续和依赖阻塞状态；“新建 Change”会在同一 Codex Thread 中排队 `$openspec-new-change`，下拉框可以切换多个 change。多个 change 共享当前 Session、worktree、分支和最终验收，不会自动生成、提交、合并或归档变更。
+OpenSpec 会话的首轮说明会由服务端幂等添加 `$openspec-explore`。会话顶部按 change 的实际文件和 OpenSpec schema 展示 artifact DAG，区分已完成、可继续和依赖阻塞状态；“新建 Change”会在同一 Agent Session 中排队 `$openspec-new-change`，下拉框可以切换多个 change。多个 change 共享当前 Session、worktree、分支和最终验收，不会自动生成、提交、合并或归档变更。
 
-原仓库不存在“可写”模式。只读会话需要修改代码时，Loop 会先创建结构化人工确认；批准后才从该会话原始基线创建 worktree，并在同一个 Codex Thread 中继续。每个会话的消息、Turn、事件、确认、Thread ID 和工作区信息都保存在 SQLite，页面通过 SSE 刷新；服务重启时，正在运行的 Turn 会标记为中断，历史对话仍可查看并由用户发送新消息继续。
+原仓库不存在“可写”模式。只读会话需要修改代码时，Loop 会先创建结构化人工确认；批准后才从该会话原始基线创建 worktree，并在同一个 Agent Session 中继续。每个会话的 Agent、模型、消息、Turn、事件、确认、Session ID 和工作区信息都保存在 SQLite，页面通过 SSE 刷新；服务重启时，正在运行的 Turn 会标记为中断，历史对话仍可查看并由用户发送新消息继续。
 
 Agent 的结构化终态分为需要确认、等待回复、待验收和阻塞。只有明确的确认结构才进入“人工确认”；普通追问不会靠自然语言猜测。Agent 报告完成后只进入待验收，用户验收才结束本地会话，不会自动修改 Todo/Meego，也不会自动执行 `git commit`、`git push`、合并或创建 MR。
 

@@ -498,7 +498,7 @@ beforeEach(() => {
         }
         return jsonResponse(agentRepositories);
       }
-      if (url.includes("/api/agent/repositories/") && url.endsWith("/openspec-readiness")) {
+      if (url.includes("/api/agent/repositories/") && url.includes("/openspec-readiness")) {
         return jsonResponse(openSpecReadiness);
       }
       if (url.startsWith("/api/agent/repositories/") && init?.method === "DELETE") {
@@ -511,6 +511,8 @@ beforeEach(() => {
           sourceKind: "todo" | "meego";
           sourceId: string;
           repositoryId: string;
+          agent?: AgentSession["agent"];
+          model?: string | null;
           mode: AgentSession["mode"];
           workflow?: { kind: AgentSession["workflowKind"]; initializeIfMissing?: boolean };
           prompt: string;
@@ -523,6 +525,8 @@ beforeEach(() => {
           sourceId: body.sourceId,
           repositoryId: body.repositoryId,
           repository,
+          agent: body.agent ?? "codex",
+          model: body.model ?? null,
           mode: body.mode,
           workflowKind: body.workflow?.kind ?? "direct",
           workspacePath: repository.path,
@@ -1121,6 +1125,29 @@ describe("Context Space workbench", () => {
     expect(agentSessions[0].mode).toBe("isolated_worktree");
   });
 
+  it("selects Claude and an optional model when starting a session", async () => {
+    agentRepositories = [{
+      id: "repo_agent_selection",
+      name: "context-space",
+      path: "/workspace/context-space",
+      kind: "git",
+      headCommit: "1234567890abcdef",
+      branch: "main",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:00Z"
+    }];
+    const user = userEvent.setup();
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/todos"]}><AppView /></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "开始 Agent 干活：准备发布计划" }));
+    await user.selectOptions(screen.getByLabelText("Agent 类型"), "claude");
+    await user.type(screen.getByLabelText("Agent 模型"), "sonnet");
+    await user.click(screen.getByRole("button", { name: "开始干活" }));
+    expect(await screen.findByRole("heading", { name: "Loop" })).toBeInTheDocument();
+    expect(agentSessions[0]).toMatchObject({ agent: "claude", model: "sonnet" });
+    expect(await screen.findByText("Claude")).toBeInTheDocument();
+    expect(screen.getByText("sonnet")).toBeInTheDocument();
+  });
+
   it("requires explicit OpenSpec initialization before creating an isolated session", async () => {
     agentRepositories = [{
       id: "repo_openspec_frontend",
@@ -1185,6 +1212,8 @@ describe("Context Space workbench", () => {
       sourceId: "todo_owed",
       repositoryId: repository.id,
       repository,
+      agent: "codex",
+      model: null,
       mode: "read_only",
       workflowKind: "direct",
       workspacePath: repository.path,
@@ -1226,6 +1255,8 @@ describe("Context Space workbench", () => {
       sourceId: "todo_owed",
       repositoryId: repository.id,
       repository,
+      agent: "codex",
+      model: null,
       mode: "read_only",
       workflowKind: "direct",
       workspacePath: repository.path,
@@ -1299,6 +1330,8 @@ describe("Context Space workbench", () => {
       sourceId: "todo_owed",
       repositoryId: repository.id,
       repository,
+      agent: "codex",
+      model: null,
       mode: "isolated_worktree",
       workflowKind: "openspec",
       workspacePath: "/workspace/worktree",

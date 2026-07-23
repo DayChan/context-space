@@ -46,6 +46,7 @@ import remarkGfm from "remark-gfm";
 import type {
   BaseMetadata,
   AgentEvent,
+  AgentKind,
   AgentMessage,
   AgentRepository,
   AgentSession,
@@ -586,6 +587,8 @@ function AgentStartDialog({
   const navigate = useNavigate();
   const [prompt, setPrompt] = useState(title);
   const [repositoryId, setRepositoryId] = useState("");
+  const [agent, setAgent] = useState<AgentKind>("codex");
+  const [model, setModel] = useState("");
   const [mode, setMode] = useState<AgentWorkspaceMode>("read_only");
   const [openSpecEnabled, setOpenSpecEnabled] = useState(false);
   const [openSpecReadiness, setOpenSpecReadiness] = useState<OpenSpecReadiness | null>(null);
@@ -608,7 +611,7 @@ function AgentStartDialog({
   useEffect(() => {
     if (!openSpecEnabled || mode !== "isolated_worktree" || !effectiveRepositoryId) return;
     let active = true;
-    api<OpenSpecReadiness>(`/api/agent/repositories/${encodeURIComponent(effectiveRepositoryId)}/openspec-readiness`)
+    api<OpenSpecReadiness>(`/api/agent/repositories/${encodeURIComponent(effectiveRepositoryId)}/openspec-readiness?agent=${agent}`)
       .then((value) => {
         if (active) {
           setOpenSpecReadiness(value);
@@ -623,7 +626,7 @@ function AgentStartDialog({
         }
       });
     return () => { active = false; };
-  }, [effectiveRepositoryId, mode, openSpecEnabled]);
+  }, [agent, effectiveRepositoryId, mode, openSpecEnabled]);
 
   async function createSession(initializeIfMissing: boolean) {
     setStarting(true);
@@ -635,6 +638,8 @@ function AgentStartDialog({
           sourceKind,
           sourceId,
           repositoryId: effectiveRepositoryId,
+          agent,
+          model: model.trim() || null,
           mode,
           workflow: openSpecEnabled
             ? { kind: "openspec", initializeIfMissing }
@@ -668,6 +673,19 @@ function AgentStartDialog({
           <button aria-label="关闭启动 Agent" onClick={onClose} type="button"><X size={18} /></button>
         </div>
         <label><span>任务说明</span><textarea aria-label="Agent 任务说明" onChange={(event) => setPrompt(event.target.value)} required value={prompt} /></label>
+        <label><span>Agent</span>
+          <select aria-label="Agent 类型" onChange={(event) => {
+            setAgent(event.target.value as AgentKind);
+            setOpenSpecReadiness(null);
+            setReadinessRepositoryId("");
+            setConfirmInitialization(false);
+          }} value={agent}>
+            <option value="codex">Codex</option>
+            <option value="traex">TraeX</option>
+            <option value="claude">Claude</option>
+          </select>
+        </label>
+        <label><span>模型（可选）</span><input aria-label="Agent 模型" maxLength={200} onChange={(event) => setModel(event.target.value)} placeholder={`${agent} 默认模型`} value={model} /><small>留空时使用所选 Agent 的默认模型</small></label>
         <label><span>工作目录</span>
           <select aria-label="Agent 工作目录" onChange={(event) => {
             setRepositoryId(event.target.value);
@@ -1667,7 +1685,7 @@ function LoopPage() {
         <aside className="agent-context-panel">
           {selectedDetail && <>
             <div className="agent-panel-heading"><strong>工作上下文</strong></div>
-            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>工作流</span><strong>{selectedDetail.workflowKind === "openspec" ? "OpenSpec" : "直接执行"}</strong></div><div><span>Codex Session ID</span><code className="agent-session-id" title={selectedDetail.threadId ?? undefined}>{selectedDetail.threadId ?? "尚未创建"}</code></div><div><span>工作目录</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>类型</span><strong>{selectedDetail.repository?.kind === "git" ? "Git 仓库" : "普通目录"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit?.slice(0, 12) ?? "不适用"}</code></div><div><span>工作区</span><code title={selectedDetail.workspacePath}>{selectedDetail.workspacePath}</code></div></div>
+            <div className="meta-list"><div><span>来源</span><strong>{selectedDetail.sourceKind}</strong></div><div><span>Agent</span><strong>{selectedDetail.agent === "codex" ? "Codex" : selectedDetail.agent === "traex" ? "TraeX" : "Claude"}</strong></div><div><span>模型</span><strong>{selectedDetail.model ?? "Agent 默认"}</strong></div><div><span>模式</span><strong>{selectedDetail.mode === "read_only" ? "只读分析" : "隔离开发"}</strong></div><div><span>工作流</span><strong>{selectedDetail.workflowKind === "openspec" ? "OpenSpec" : "直接执行"}</strong></div><div><span>Session ID</span><code className="agent-session-id" title={selectedDetail.threadId ?? undefined}>{selectedDetail.threadId ?? "尚未创建"}</code></div><div><span>工作目录</span><strong>{selectedDetail.repository?.name ?? "—"}</strong></div><div><span>类型</span><strong>{selectedDetail.repository?.kind === "git" ? "Git 仓库" : "普通目录"}</strong></div><div><span>分支</span><strong>{selectedDetail.branch ?? "不创建"}</strong></div><div><span>基线</span><code>{selectedDetail.baseCommit?.slice(0, 12) ?? "不适用"}</code></div><div><span>工作区</span><code title={selectedDetail.workspacePath}>{selectedDetail.workspacePath}</code></div></div>
             {selectedDetail.workspaceLifecycle !== "removed" && <div className="agent-editor-section"><label htmlFor="agent-editor">打开工作区</label><div><select id="agent-editor" onChange={(event) => setSelectedEditor(event.target.value as typeof selectedEditor)} value={selectedEditor}><option value="trae">Trae</option><option value="trae_cn">Trae CN</option><option value="vscode">VS Code</option><option value="pycharm">PyCharm</option><option value="goland">GoLand</option></select><button className="secondary-button" disabled={openingEditor !== null} onClick={() => void openWorkspace(selectedEditor)} type="button"><ArrowUpRight size={13} />{openingEditor ? "正在打开" : "打开"}</button></div></div>}
             <div className="agent-context-actions">
               {selectedDetail.mode === "read_only" && selectedDetail.status === "active" && <button className="secondary-button" onClick={() => void action("upgrade-workspace")} type="button"><Sparkles size={15} />创建 worktree 继续</button>}

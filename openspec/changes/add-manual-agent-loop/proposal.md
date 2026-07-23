@@ -10,7 +10,7 @@ Context Space 当前只能整理 Todo 与 Meego 上下文，Loop 仍是不可执
 - 增加持久 Agent Session、Turn、Event、Message 与 Confirmation Request，将 Codex Thread 和运行投影保存在 SQLite，并通过流式事件更新 Loop。
 - 将 Loop 从只读 readiness 占位升级为人工 Agent 工作台，展示正在执行、需要人工确认、等待回复和最近结束的会话，并支持继续对话、停止、恢复与人工验收。
 - Agent 的完成结论不会自动完成 Todo、修改 Meego、提交、合并、push 或创建 MR；所有外部状态仍由用户显式处理。
-- 第一阶段只支持人工启动和单 Agent Codex Runtime，不增加定时触发、自动选仓、多 Agent 编排或无人值守自动化。
+- 人工启动时支持选择 Codex、TraeX 或 Claude Runtime，并可选择性覆盖模型；未覆盖时使用对应 Agent 的默认模型。不增加定时触发、自动选仓、多 Agent 编排或无人值守自动化。
 
 ## Capabilities
 
@@ -25,7 +25,7 @@ Context Space 当前只能整理 Todo 与 Meego 上下文，Loop 仍是不可执
 
 ## Impact
 
-- 后端新增 SQLite 表、Repository 与 Agent Runtime 服务、Codex SDK 流式执行适配器、Git worktree 管理和 Loop API。
+- 后端新增 SQLite 表、Repository 与 Agent Runtime 服务、Codex SDK 及 TraeX/Claude CLI 流式执行适配器、Git worktree 管理和 Loop API。
 - 前端修改 Todo、Meego、Loop 与 Settings 页面，并增加 SSE 事件消费与人工确认交互。
 - 继续复用现有 `@openai/codex-sdk`、本地认证、CSRF、结构化日志和 SQLite 基础设施，不引入远程服务。
 - Agent 会在用户选择的代码仓库或专属 worktree 中读取或修改文件；默认不启用网络，不提供原仓库可写模式。

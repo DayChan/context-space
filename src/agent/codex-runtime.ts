@@ -47,13 +47,15 @@ export class CodexAgentRuntime implements AgentRuntime {
   constructor(private readonly client = new Codex()) {}
 
   async run(input: AgentRuntimeInput): Promise<AgentRuntimeResult> {
+    if (input.agent !== "codex") throw new Error(`Codex Runtime 不支持 Agent：${input.agent}`);
     const options = {
       workingDirectory: input.workingDirectory,
       sandboxMode: input.mode === "read_only" ? "read-only" as const : "workspace-write" as const,
       approvalPolicy: "never" as const,
       networkAccessEnabled: false,
       webSearchMode: "disabled" as const,
-      additionalDirectories: []
+      additionalDirectories: [],
+      ...(input.model ? { model: input.model } : {})
     };
     const thread = input.threadId
       ? this.client.resumeThread(input.threadId, options)

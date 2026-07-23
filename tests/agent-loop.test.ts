@@ -487,15 +487,17 @@ artifacts:
     const started = await request(context.app)
       .post("/api/agent/sessions")
       .set("x-context-space-csrf", csrf)
-      .send({ sourceKind: "todo", sourceId: "agent_api", repositoryId: repository.body.id, mode: "read_only", prompt: "分析这个任务" })
+      .send({ sourceKind: "todo", sourceId: "agent_api", repositoryId: repository.body.id, agent: "claude", model: "sonnet", mode: "read_only", prompt: "分析这个任务" })
       .expect(202);
     const completed = await waitFor(
       () => context.runtime.agentLoop.get(started.body.id)!,
       (value) => value.attention === "review_required"
     );
     expect(completed.workspacePath).toBe(repository.body.path);
+    expect(completed).toMatchObject({ agent: "claude", model: "sonnet" });
     expect(completed.threadId).toBe("thread_api");
     expect(completed.messages?.at(-1)?.content).toBe("分析完成");
+    expect(runtime.calls[0]).toMatchObject({ agent: "claude", model: "sonnet" });
     await request(context.app)
       .post(`/api/agent/sessions/${started.body.id}/open-workspace`)
       .set("x-context-space-csrf", csrf)

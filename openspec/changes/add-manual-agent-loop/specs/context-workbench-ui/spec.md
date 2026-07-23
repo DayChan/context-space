@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: 事项上的 Agent 启动入口
-工作台 SHALL 在可执行 Todo 和未完成 Meego 条目上提供可访问的“开始 Agent 干活”入口，并在启动前展示可编辑任务说明、已注册仓库和只读或隔离开发工作模式。
+工作台 SHALL 在可执行 Todo 和未完成 Meego 条目上提供可访问的“开始 Agent 干活”入口，并在启动前展示可编辑任务说明、已注册仓库、Agent、可选模型和只读或隔离开发工作模式。
 
 #### Scenario: 从 Meego 打开启动面板
 - **WHEN** 用户点击未完成 Meego 条目的 Agent 按钮
@@ -10,6 +10,10 @@
 #### Scenario: 已完成事项不提供启动
 - **WHEN** Todo 已完成、等待他人或 Meego 已完成
 - **THEN** 工作台不提供可提交的 Agent 启动动作
+
+#### Scenario: 不填写模型
+- **WHEN** 用户选择 Agent 但将模型输入留空
+- **THEN** 启动请求将模型保存为 `null` 并明确使用对应 Agent 默认模型
 
 ### Requirement: Agent 会话工作台
 Loop SHALL 使用会话列表、对话区域和工作上下文区域展示真实 Agent Session；用户 SHALL 能查看当前状态、来源、仓库、工作区、分支、消息、命令与文件修改摘要。会话选择项与所在面板 SHALL 保持一致宽度，对话区域 SHALL 按发生时间在同一时间线内交错展示消息、命令、文件修改与 Turn 异常。

@@ -54,9 +54,11 @@ export class AgentCoordinator {
         this.events.changed(sessionId);
         const controller = new AbortController();
         this.controllers.set(sessionId, controller);
-        this.logger.info("agent.turn.started", { session_id: sessionId, turn_id: turn.id, mode: session.mode });
+        this.logger.info("agent.turn.started", { session_id: sessionId, turn_id: turn.id, agent: session.agent, model: session.model, mode: session.mode });
         try {
           const result = await this.runtime.run({
+            agent: session.agent,
+            model: session.model,
             threadId: session.threadId,
             workingDirectory: session.workspacePath,
             mode: session.mode,

@@ -435,6 +435,18 @@ export const MACHINE_MIGRATIONS: readonly MachineMigration[] = [
       CREATE UNIQUE INDEX agent_messages_session_sequence_idx
         ON agent_messages(session_id, sequence);
     `
+  },
+  {
+    version: 8,
+    name: "agent-runtime-selection",
+    sql: `
+      ALTER TABLE agent_sessions
+        ADD COLUMN agent TEXT NOT NULL DEFAULT 'codex'
+        CHECK(agent IN ('codex', 'traex', 'claude'));
+
+      ALTER TABLE agent_sessions
+        ADD COLUMN model TEXT;
+    `
   }
 ];
 

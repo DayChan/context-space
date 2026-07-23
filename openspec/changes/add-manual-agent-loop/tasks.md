@@ -45,3 +45,10 @@
 
 - [x] 8.1 将消息、工具事件和 Turn 异常合并为按时间排序的对话时间线
 - [x] 8.2 统一会话选择项与启动面板控件宽度，增加前端回归测试并执行完整校验
+
+## 9. 多 Agent 与模型选择
+
+- [x] 9.1 扩展 Session 类型和 SQLite migration，持久化 Codex、TraeX、Claude 与可空模型覆盖
+- [x] 9.2 实现多 Runtime 路由、TraeX/Claude 流式 CLI 适配和模型默认语义
+- [x] 9.3 扩展启动 API、启动面板和 Loop 上下文，支持选择 Agent 与可选模型
+- [x] 9.4 增加 Runtime、API、持久化与前端回归测试，更新 README 并执行完整校验

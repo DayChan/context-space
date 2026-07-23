@@ -4,6 +4,7 @@ import type {
   AgentAttention,
   AgentConfirmation,
   AgentEvent,
+  AgentKind,
   AgentMessage,
   AgentOutcome,
   AgentRepository,
@@ -24,6 +25,7 @@ interface SessionRow {
   id: string; title: string; source_kind: "todo" | "meego"; source_id: string;
   repository_id: string; mode: AgentWorkspaceMode; workspace_path: string;
   workflow_kind: AgentWorkflowKind;
+  agent: AgentKind; model: string | null;
   branch: string | null; base_commit: string; thread_id: string | null;
   status: AgentSession["status"]; attention: AgentAttention;
   workspace_lifecycle: AgentSession["workspaceLifecycle"];
@@ -105,7 +107,7 @@ export class AgentRepositoryStore {
     title: string; sourceKind: "todo" | "meego"; sourceId: string;
     repositoryId: string; mode: AgentWorkspaceMode; workspacePath: string;
     workflowKind?: AgentWorkflowKind; branch: string | null; baseCommit: string | null;
-    prompt: string; id?: string;
+    agent?: AgentKind; model?: string | null; prompt: string; id?: string;
   }): AgentSession {
     const id = input.id ?? `session_${randomUUID()}`;
     const messageId = `message_${randomUUID()}`;
@@ -115,10 +117,12 @@ export class AgentRepositoryStore {
       this.database.connection.prepare(
         `INSERT INTO agent_sessions(
           id, title, source_kind, source_id, repository_id, mode, workspace_path,
-          workflow_kind, branch, base_commit, status, attention, workspace_lifecycle, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'none', 'ready', ?, ?)`
+          workflow_kind, agent, model, branch, base_commit, status, attention,
+          workspace_lifecycle, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'none', 'ready', ?, ?)`
       ).run(id, input.title, input.sourceKind, input.sourceId, input.repositoryId, input.mode,
-        input.workspacePath, input.workflowKind ?? "direct", input.branch, input.baseCommit ?? "", timestamp, timestamp);
+        input.workspacePath, input.workflowKind ?? "direct", input.agent ?? "codex", input.model ?? null,
+        input.branch, input.baseCommit ?? "", timestamp, timestamp);
       this.insertMessage({ id: messageId, sessionId: id, turnId, role: "user", content: input.prompt, createdAt: timestamp });
       this.database.connection.prepare(
         `INSERT INTO agent_turns(id, session_id, input_message_id, status, created_at)
@@ -374,7 +378,7 @@ export class AgentRepositoryStore {
   private listEvents(id: string): AgentEvent[] { return (this.database.connection.prepare("SELECT * FROM agent_events WHERE session_id = ? ORDER BY sequence DESC LIMIT 200").all(id) as EventRow[]).reverse().map((r) => this.hydrateEvent(r)); }
   private listConfirmations(id: string): AgentConfirmation[] { return (this.database.connection.prepare("SELECT * FROM agent_confirmations WHERE session_id = ? ORDER BY created_at").all(id) as ConfirmationRow[]).map((r) => this.hydrateConfirmation(r)); }
   private hydrateRepository(r: RepositoryRow): AgentRepository { return { id: r.id, name: r.name, path: r.path, kind: r.kind, headCommit: r.head_commit || null, branch: r.branch, createdAt: r.created_at, updatedAt: r.updated_at }; }
-  private hydrateSession(r: SessionRow): AgentSession { return { id: r.id, title: r.title, sourceKind: r.source_kind, sourceId: r.source_id, repositoryId: r.repository_id, mode: r.mode, workflowKind: r.workflow_kind ?? "direct", workspacePath: r.workspace_path, branch: r.branch, baseCommit: r.base_commit || null, threadId: r.thread_id, status: r.status, attention: r.attention, workspaceLifecycle: r.workspace_lifecycle, createdAt: r.created_at, updatedAt: r.updated_at, endedAt: r.ended_at }; }
+  private hydrateSession(r: SessionRow): AgentSession { return { id: r.id, title: r.title, sourceKind: r.source_kind, sourceId: r.source_id, repositoryId: r.repository_id, agent: r.agent ?? "codex", model: r.model, mode: r.mode, workflowKind: r.workflow_kind ?? "direct", workspacePath: r.workspace_path, branch: r.branch, baseCommit: r.base_commit || null, threadId: r.thread_id, status: r.status, attention: r.attention, workspaceLifecycle: r.workspace_lifecycle, createdAt: r.created_at, updatedAt: r.updated_at, endedAt: r.ended_at }; }
   private hydrateMessage(r: MessageRow): AgentMessage { return { id: r.id, sessionId: r.session_id, turnId: r.turn_id, role: r.role, content: r.content, createdAt: r.created_at }; }
   private hydrateTurn(r: TurnRow): AgentTurn { return { id: r.id, sessionId: r.session_id, inputMessageId: r.input_message_id, status: r.status, outcome: r.outcome, usage: r.usage_json ? decodeJson<Record<string, number>>(r.usage_json) : null, error: r.error, createdAt: r.created_at, startedAt: r.started_at, completedAt: r.completed_at }; }
   private hydrateEvent(r: EventRow): AgentEvent { return { id: r.id, sequence: r.sequence, sessionId: r.session_id, turnId: r.turn_id, type: r.type, data: decodeJson<Record<string, unknown>>(r.data_json), createdAt: r.created_at }; }
