@@ -18,6 +18,10 @@ import {
   type WorkspaceOpener
 } from "../src/agent";
 import type { CommandRunner } from "../src/adapters/lark/runner";
+import {
+  REQUIRED_LARK_SYNC_SCOPES,
+  type LarkPermissionChecker
+} from "../src/adapters/lark/permissions";
 import { createTodoMetadata } from "../src/core/todo";
 import { createLogger } from "../src/logging";
 import { AgentRepositoryStore, openMachineDatabase, type MachineDatabase } from "../src/machine";
@@ -78,6 +82,19 @@ class EmptyRunner implements CommandRunner {
     return args[0] === "task" ? { tasks: [] } : args[0] === "calendar" ? { events: [] } : { messages: [] };
   }
 }
+
+const readyLarkPermissions: LarkPermissionChecker = {
+  check: async () => ({
+    state: "ready",
+    ready: true,
+    required_scopes: [...REQUIRED_LARK_SYNC_SCOPES],
+    granted_scopes: [...REQUIRED_LARK_SYNC_SCOPES],
+    missing_scopes: [],
+    checked_at: "2026-07-22T00:00:00.000Z",
+    message: "飞书同步所需权限已就绪。",
+    authorization_command: null
+  })
+};
 
 class FakeOpenSpecRunner implements OpenSpecCommandRunner {
   calls: Array<{ cwd: string; args: string[] }> = [];
@@ -192,9 +209,9 @@ artifacts:
     expect(session).toMatchObject({ workflowKind: "openspec", mode: "isolated_worktree" });
     expect(session.messages?.[0].content).toBe("$openspec-explore\n\n设计认证功能");
     expect(openspec.readiness(session.workspacePath).ready).toBe(true);
-    expect(service.createOpenSpecChange(session.id, "add-auth", "新增认证")).toMatchObject({ status: "queued" });
-    expect(service.get(session.id)?.messages?.at(-1)?.content).toBe("$openspec-new-change add-auth\n\n新增认证");
-    expect(() => service.createOpenSpecChange(session.id, "../escape", "非法路径")).toThrow("kebab-case");
+    expect(service.createOpenSpecChange(session.id, "add-auth")).toMatchObject({ status: "queued" });
+    expect(service.get(session.id)?.messages?.at(-1)?.content).toBe("$openspec-new-change add-auth");
+    expect(() => service.createOpenSpecChange(session.id, "../escape")).toThrow("kebab-case");
   }, 15_000);
 
   it("从 HEAD 继承 .agents skills 的隔离 worktree 无需重复初始化", async () => {
@@ -452,6 +469,7 @@ artifacts:
     const context = await createApp({
       workspaceRoot: root,
       commandRunner: new EmptyRunner(),
+      larkPermissionChecker: readyLarkPermissions,
       agentRuntime: runtime,
       openSpecRunner: new FakeOpenSpecRunner(schemaPath),
       workspaceOpener,
@@ -530,7 +548,7 @@ artifacts:
     await request(context.app)
       .post(`/api/agent/sessions/${openSpecSession.body.id}/openspec/changes`)
       .set("x-context-space-csrf", csrf)
-      .send({ name: "add-auth", description: "新增认证" })
+      .send({ name: "add-auth" })
       .expect(202);
 
     const server = context.app.listen(0);

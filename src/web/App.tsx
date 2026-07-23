@@ -30,6 +30,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import {
   BrowserRouter,
@@ -597,6 +598,14 @@ function AgentStartDialog({
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
   const effectiveRepositoryId = repositoryId || repositories.data[0]?.id || "";
   const selectedRepository = repositories.data.find(({ id }) => id === effectiveRepositoryId);
   const canCreateWorktree = selectedRepository?.kind === "git";
@@ -720,7 +729,10 @@ function AgentStartButton({ sourceKind, sourceId, title, disabled = false }: { s
   const [open, setOpen] = useState(false);
   return <>
     <button aria-label={`开始 Agent 干活：${title}`} className="agent-start-button" disabled={disabled} onClick={() => setOpen(true)} type="button"><Play size={14} />Agent</button>
-    {open && <AgentStartDialog onClose={() => setOpen(false)} sourceId={sourceId} sourceKind={sourceKind} title={title} />}
+    {open && createPortal(
+      <AgentStartDialog onClose={() => setOpen(false)} sourceId={sourceId} sourceKind={sourceKind} title={title} />,
+      document.body
+    )}
   </>;
 }
 
@@ -1504,7 +1516,6 @@ function OpenSpecWorkflowPanel({ session, revision }: { session: AgentSession; r
   const [creating, setCreating] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [changeName, setChangeName] = useState("");
-  const [description, setDescription] = useState("");
   const [error, setError] = useState("");
   const previousRevision = useRef(revision);
   const reloadChanges = changes.reload;
@@ -1526,11 +1537,10 @@ function OpenSpecWorkflowPanel({ session, revision }: { session: AgentSession; r
     try {
       await api(`/api/agent/sessions/${encodeURIComponent(session.id)}/openspec/changes`, {
         method: "POST",
-        body: JSON.stringify({ name: changeName.trim(), description: description.trim() })
+        body: JSON.stringify({ name: changeName.trim() })
       });
       setSelectedChange(changeName.trim());
       setChangeName("");
-      setDescription("");
       setShowCreate(false);
       await reloadChanges();
     } catch (caught) {
@@ -1540,7 +1550,7 @@ function OpenSpecWorkflowPanel({ session, revision }: { session: AgentSession; r
     }
   }
 
-  return <section className="openspec-workflow-panel" aria-label="OpenSpec Workflow"><div className="openspec-workflow-toolbar"><button className="secondary-button" disabled={session.status !== "active"} onClick={() => setShowCreate((value) => !value)} type="button"><Plus size={13} />新建 Change</button><select aria-label="OpenSpec Change" disabled={!changes.data.length} onChange={(event) => setSelectedChange(event.target.value)} value={effectiveChange}><option value="">选择 Change</option>{changes.data.map((change) => <option key={change.name} value={change.name}>{change.name}</option>)}</select></div>{showCreate && <form className="openspec-change-form" onSubmit={createChange}><input aria-label="Change 名称" onChange={(event) => setChangeName(event.target.value)} pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" placeholder="add-feature-name" required value={changeName} /><input aria-label="Change 说明" onChange={(event) => setDescription(event.target.value)} placeholder="描述要构建或修复的内容" required value={description} /><button className="primary-button" disabled={creating} type="submit">{creating ? "排队中…" : "调用 openspec-new-change"}</button></form>}<ErrorBanner message={error || changes.error} />{effectiveChange ? <OpenSpecWorkflowDetail changeName={effectiveChange} revision={revision} sessionId={session.id} /> : !changes.loading && <div className="openspec-workflow-empty">还没有 Change，先调用 openspec-new-change 创建一个。</div>}</section>;
+  return <section className="openspec-workflow-panel" aria-label="OpenSpec Workflow"><div className="openspec-workflow-toolbar"><button className="secondary-button" disabled={session.status !== "active"} onClick={() => setShowCreate((value) => !value)} type="button"><Plus size={13} />新建 Change</button><select aria-label="OpenSpec Change" disabled={!changes.data.length} onChange={(event) => setSelectedChange(event.target.value)} value={effectiveChange}><option value="">选择 Change</option>{changes.data.map((change) => <option key={change.name} value={change.name}>{change.name}</option>)}</select></div>{showCreate && <form className="openspec-change-form" onSubmit={createChange}><input aria-label="Change 名称" onChange={(event) => setChangeName(event.target.value)} pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" placeholder="add-feature-name" required value={changeName} /><button className="primary-button" disabled={creating} type="submit">{creating ? "排队中…" : "调用 openspec-new-change"}</button></form>}<ErrorBanner message={error || changes.error} />{effectiveChange ? <OpenSpecWorkflowDetail changeName={effectiveChange} revision={revision} sessionId={session.id} /> : !changes.loading && <div className="openspec-workflow-empty">还没有 Change，先调用 openspec-new-change 创建一个。</div>}</section>;
 }
 
 function LoopPage() {

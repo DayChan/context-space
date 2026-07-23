@@ -13,10 +13,13 @@ if (!["127.0.0.1", "localhost", "::1"].includes(host)) {
 }
 const workspaceRoot = path.resolve(process.env.CONTEXT_SPACE_ROOT ?? "./workspace");
 
-const webRoot = path.resolve("./dist");
+const webRoot = path.resolve(process.env.CONTEXT_SPACE_STATIC_ROOT ?? "./dist");
+const quietCli = process.env.CONTEXT_SPACE_CLI_QUIET === "true";
 const logger = createLogger({
   workspaceRoot,
-  environment: process.env
+  environment: quietCli
+    ? { ...process.env, CONTEXT_SPACE_LOG_CONSOLE: "false" }
+    : process.env
 });
 const serverLogger = logger.child({ component: "server" });
 
@@ -48,6 +51,10 @@ try {
   runtime.sourceRetention.start();
   await runtime.markdownIndexSync.start();
   const server = app.listen(port, host, () => {
+    if (quietCli) {
+      const urlHost = host === "::1" ? "[::1]" : host;
+      process.stdout.write(`http://${urlHost}:${port}\n`);
+    }
     serverLogger.info("server.listening", {
       host,
       port,

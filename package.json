@@ -1,8 +1,22 @@
 {
-  "name": "context-space",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@duoruchen/context-space",
+  "version": "0.1.2",
+  "description": "A local-first workspace for Lark context, todos, knowledge, and agent workflows.",
   "type": "module",
+  "license": "UNLICENSED",
+  "bin": {
+    "context-space": "bin/context-space.js"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "dist-server/",
+    ".env.example"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "node": ">=20"
   },
@@ -14,6 +28,8 @@
     "build:server": "rm -rf dist-server && esbuild src/server/main.ts --bundle --platform=node --format=esm --target=node20 --packages=external --outfile=dist-server/main.js",
     "build:web": "vite build",
     "start": "node dist-server/main.js",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

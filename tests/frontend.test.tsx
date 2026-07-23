@@ -549,7 +549,7 @@ beforeEach(() => {
       }
       if (/\/api\/agent\/sessions\/[^/]+\/openspec\/changes$/.test(url)) {
         if (init?.method === "POST") {
-          const body = JSON.parse(String(init.body ?? "{}")) as { name: string; description: string };
+          const body = JSON.parse(String(init.body ?? "{}")) as { name: string };
           openSpecChanges = [{ name: body.name, completedTasks: 0, totalTasks: 0, status: "no-tasks", lastModified: "2026-07-21T00:04:00Z" }, ...openSpecChanges];
           openSpecWorkflows[body.name] = { changeName: body.name, schemaName: "spec-driven", relativePath: `openspec/changes/${body.name}`, isComplete: false, nodes: [{ id: "proposal", description: "Proposal", outputPath: "proposal.md", requires: [], status: "ready", missingDeps: [] }] };
           return jsonResponse({ id: "turn_openspec_new", status: "queued" }, 202);
@@ -1092,6 +1092,10 @@ describe("Context Space workbench", () => {
     );
     await userEvent.setup().click(screen.getByRole("button", { name: "开始 Agent 干活：Q 标签需求" }));
     expect(screen.getByRole("dialog", { name: "启动 Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "启动 Agent" }).parentElement?.parentElement).toBe(document.body);
+    expect(document.body).toHaveStyle({ overflow: "hidden" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "关闭启动 Agent" }));
+    await waitFor(() => expect(document.body.style.overflow).toBe(""));
   });
 
   it("renders the manual Loop workbench without enabling automatic execution", async () => {
@@ -1366,12 +1370,12 @@ describe("Context Space workbench", () => {
     await waitFor(() => expect(screen.queryByText("已完成")).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "新建 Change" }));
     await user.type(screen.getByLabelText("Change 名称"), "add-search");
-    await user.type(screen.getByLabelText("Change 说明"), "新增搜索能力");
+    expect(screen.queryByLabelText("Change 说明")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "调用 openspec-new-change" }));
     expect(await screen.findByRole("option", { name: "add-search" })).toBeInTheDocument();
     await waitFor(() => expect(vi.mocked(fetch).mock.calls).toContainEqual([
       "/api/agent/sessions/session_openspec_workflow/openspec/changes",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "add-search", description: "新增搜索能力" }) })
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "add-search" }) })
     ]));
   });
 

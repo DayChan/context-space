@@ -56,7 +56,7 @@
 OpenSpec 会话 SHALL 允许用户通过 `$openspec-new-change` 创建多个合法 kebab-case change，并 SHALL 提供 change 列表、当前选择和各自独立的 schema workflow 投影。所有 change 共享该会话的 Codex Thread、worktree 和验收生命周期。
 
 #### Scenario: 请求新建 Change
-- **WHEN** 用户提交合法 change 名称和说明
+- **WHEN** 用户提交合法 change 名称
 - **THEN** 系统在同一会话排队一条调用 `$openspec-new-change` 的 Turn，并在 change 目录出现后将其加入列表
 
 #### Scenario: 切换 Change

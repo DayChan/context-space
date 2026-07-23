@@ -233,8 +233,7 @@ const openAgentWorkspaceSchema = z.object({
   editor: z.enum(["trae", "trae_cn", "vscode", "pycharm", "goland"])
 }).strict();
 const createOpenSpecChangeSchema = z.object({
-  name: z.string().trim().min(1).max(120).regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/),
-  description: z.string().trim().min(1).max(10_000)
+  name: z.string().trim().min(1).max(120).regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)
 }).strict();
 
 export interface Runtime {
@@ -1405,7 +1404,7 @@ export async function createApp(options: CreateAppOptions): Promise<{
   app.post("/api/agent/sessions/:id/openspec/changes", (request, response, next) => {
     try {
       const input = createOpenSpecChangeSchema.parse(request.body);
-      response.status(202).json(agentLoop.createOpenSpecChange(request.params.id, input.name, input.description));
+      response.status(202).json(agentLoop.createOpenSpecChange(request.params.id, input.name));
     } catch (error) {
       next(error);
     }

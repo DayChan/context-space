@@ -8,6 +8,15 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    files: ["bin/**/*.js"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+        URL: "readonly"
+      }
+    }
+  },
+  {
     files: ["src/web/**/*.{ts,tsx}"],
     plugins: {
       "react-hooks": reactHooks,

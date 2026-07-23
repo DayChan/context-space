@@ -26,6 +26,30 @@ Context Space 是一个单用户、本机运行的工作上下文系统。它通
 - 选择 `codex-exec` 时，`codex` 命令必须位于 `PATH`
 - 选择 `traex` 时，`traex` 命令必须位于 `PATH`，并已完成认证
 
+## 安装和运行
+
+无需全局安装即可启动：
+
+```bash
+npx @duoruchen/context-space
+```
+
+默认在当前目录的 `workspace/` 中保存本地数据，并监听
+`http://127.0.0.1:4318`。可以通过环境变量指定其他私有目录或端口：
+
+```bash
+CONTEXT_SPACE_ROOT=/absolute/private/path \
+CONTEXT_SPACE_PORT=4318 \
+npx @duoruchen/context-space
+```
+
+也可以先全局安装：
+
+```bash
+npm install --global @duoruchen/context-space
+context-space
+```
+
 Codex SDK 和非交互 CLI 的当前接口说明见 [Codex SDK 官方文档](https://developers.openai.com/codex/sdk/)与 [Codex 非交互模式官方文档](https://developers.openai.com/codex/noninteractive/)。
 
 ## 开发

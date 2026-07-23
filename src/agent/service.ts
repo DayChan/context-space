@@ -102,13 +102,11 @@ export class AgentLoopService {
     return this.openSpec.workflow(session.workspacePath, changeName);
   }
 
-  createOpenSpecChange(sessionId: string, name: string, description: string) {
+  createOpenSpecChange(sessionId: string, name: string) {
     const session = this.openSpecSession(sessionId);
     if (session.status !== "active") throw new AgentConflictError("Agent 会话已结束");
     if (!isOpenSpecChangeName(name)) throw new AgentRequestError("OpenSpec change 名称必须是 kebab-case");
-    const normalizedDescription = description.trim();
-    if (!normalizedDescription) throw new AgentRequestError("OpenSpec change 说明不能为空");
-    return this.send(sessionId, `${session.agent === "codex" ? "$" : "/"}openspec-new-change ${name}\n\n${normalizedDescription}`);
+    return this.send(sessionId, `${session.agent === "codex" ? "$" : "/"}openspec-new-change ${name}`);
   }
 
   private openSpecSession(id: string): AgentSession {
