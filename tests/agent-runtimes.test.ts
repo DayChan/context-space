@@ -154,6 +154,35 @@ process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
     expect(result.message).not.toContain('"outcome"');
   });
 
+  it("TraeX Resume 控制字段非法时保留 message 正文", async () => {
+    const command = await executable("fake-traex-invalid-control", `
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const output = args[args.indexOf("--output-last-message") + 1];
+fs.writeFileSync(output, JSON.stringify({
+  message: "当前环境为只读模式，需要升级工作区后继续。",
+  outcome: "needs_confirmation",
+  confirmation: {
+    kind: "permission",
+    question: "是否允许写入？",
+    options: ["允许", "拒绝"]
+  }
+}));
+process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "traex-session" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
+`);
+    const result = await new TraexAgentRuntime(command).run(runtimeInput({
+      threadId: "traex-session"
+    }));
+    expect(result).toMatchObject({
+      threadId: "traex-session",
+      message: "当前环境为只读模式，需要升级工作区后继续。",
+      outcome: "awaiting_reply",
+      usage: null
+    });
+    expect(result.confirmation).toBeUndefined();
+  });
+
   it("不把 TraeX Resume 返回的损坏 JSON 降级为普通文本", async () => {
     const command = await executable("fake-traex-invalid-json", `
 const fs = require("node:fs");

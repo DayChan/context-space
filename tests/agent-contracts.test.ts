@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_PROMPT_SUFFIX,
   AGENT_TURN_OUTPUT_SCHEMA,
   agentTurnResultSchema
 } from "../src/agent/contracts";
@@ -20,6 +21,14 @@ function assertStrictRequiredObjects(value: unknown): void {
 }
 
 describe("Agent Structured Output contract", () => {
+  it("明确列出合法 confirmation kind 及其用途", () => {
+    expect(AGENT_PROMPT_SUFFIX).toContain(
+      "confirmation.kind 只能是 decision、action_approval、workspace_upgrade"
+    );
+    expect(AGENT_PROMPT_SUFFIX).toContain("从只读升级为可写使用 workspace_upgrade");
+    expect(AGENT_PROMPT_SUFFIX).toContain("禁止使用其他值");
+  });
+
   it("marks every object property required and represents confirmation as nullable", () => {
     assertStrictRequiredObjects(AGENT_TURN_OUTPUT_SCHEMA);
     const root = AGENT_TURN_OUTPUT_SCHEMA as {

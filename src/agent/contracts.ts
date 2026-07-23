@@ -77,5 +77,6 @@ export const AGENT_PROMPT_SUFFIX = `
 - 如果需要用户做决定、批准动作或从只读升级为可写，请停止当前轮次并返回 needs_confirmation。
 - 如果工作已经完成，返回 completed；仍需普通补充信息时返回 awaiting_reply；无法继续时返回 blocked。
 - 只有 needs_confirmation 可以返回 confirmation 对象；其他 outcome 必须返回 confirmation: null。
+- confirmation.kind 只能是 decision、action_approval、workspace_upgrade：方案选择使用 decision，动作批准使用 action_approval，从只读升级为可写使用 workspace_upgrade；禁止使用其他值。
 - 最终输出必须遵循提供的 JSON Schema，message 是展示给用户的简体中文回复。
 </context_space_contract>`;

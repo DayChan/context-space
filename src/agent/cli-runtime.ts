@@ -25,25 +25,29 @@ function numericUsage(value: unknown): Record<string, number> | null {
   return entries.length ? Object.fromEntries(entries) : null;
 }
 
-function structuredJsonSuffix(
+function jsonSuffix(
   value: string
 ): { candidate: unknown; displayMessage: string | null } | undefined {
   let start = value.lastIndexOf("{");
   while (start >= 0) {
     try {
       const candidate = JSON.parse(value.slice(start));
-      if (agentTurnResultSchema.safeParse(candidate).success) {
-        return {
-          candidate,
-          displayMessage: value.slice(0, start).trim() || null
-        };
-      }
+      return {
+        candidate,
+        displayMessage: value.slice(0, start).trim() || null
+      };
     } catch {
-      // 继续向前寻找能够覆盖完整协议对象的起点。
+      // 继续向前寻找能够覆盖完整 JSON 对象的起点。
     }
     start = start > 0 ? value.lastIndexOf("{", start - 1) : -1;
   }
   return undefined;
+}
+
+function candidateMessage(candidate: unknown): string | null {
+  if (!candidate || typeof candidate !== "object") return null;
+  const message = (candidate as Record<string, unknown>).message;
+  return typeof message === "string" && message.trim() ? message.trim() : null;
 }
 
 function parseFinal(
@@ -58,7 +62,7 @@ function parseFinal(
       candidate = JSON.parse(trimmed);
     } catch (error) {
       const structuredSuffix = options.allowPlainText
-        ? structuredJsonSuffix(trimmed)
+        ? jsonSuffix(trimmed)
         : undefined;
       if (structuredSuffix !== undefined) {
         candidate = structuredSuffix.candidate;
@@ -79,11 +83,21 @@ function parseFinal(
       }
     }
   }
-  const parsed = agentTurnResultSchema.parse(candidate);
+  const parsed = agentTurnResultSchema.safeParse(candidate);
+  if (!parsed.success) {
+    const fallbackMessage = displayMessage ?? candidateMessage(candidate);
+    if (options.allowPlainText && fallbackMessage) {
+      return {
+        message: fallbackMessage,
+        outcome: "awaiting_reply"
+      };
+    }
+    throw parsed.error;
+  }
   return {
-    message: displayMessage ?? parsed.message,
-    outcome: parsed.outcome,
-    ...(parsed.confirmation ? { confirmation: parsed.confirmation } : {})
+    message: displayMessage ?? parsed.data.message,
+    outcome: parsed.data.outcome,
+    ...(parsed.data.confirmation ? { confirmation: parsed.data.confirmation } : {})
   };
 }
 
