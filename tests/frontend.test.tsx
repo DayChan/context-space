@@ -1241,6 +1241,48 @@ describe("Context Space workbench", () => {
     expect(screen.getByText(/会话与工作区已保留/)).toBeInTheDocument();
   });
 
+  it("shows Working while the latest Agent turn is running", async () => {
+    const repository: AgentRepository = {
+      id: "repo_running",
+      name: "context-space",
+      path: "/workspace/context-space",
+      kind: "git",
+      headCommit: "1234567890abcdef",
+      branch: "main",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:00Z"
+    };
+    agentSessions = [{
+      id: "session_running",
+      title: "运行中的任务",
+      sourceKind: "todo",
+      sourceId: "todo_owed",
+      repositoryId: repository.id,
+      repository,
+      agent: "traex",
+      model: null,
+      mode: "read_only",
+      workflowKind: "direct",
+      workspacePath: repository.path,
+      branch: null,
+      baseCommit: repository.headCommit,
+      threadId: "thread_running",
+      status: "active",
+      attention: "none",
+      workspaceLifecycle: "ready",
+      createdAt: "2026-07-21T00:00:00Z",
+      updatedAt: "2026-07-21T00:00:01Z",
+      endedAt: null,
+      messages: [{ id: "message_running", sessionId: "session_running", turnId: "turn_running", role: "user", content: "执行任务", createdAt: "2026-07-21T00:00:00Z" }],
+      turns: [{ id: "turn_running", sessionId: "session_running", inputMessageId: "message_running", status: "running", outcome: null, usage: null, error: null, createdAt: "2026-07-21T00:00:00Z", startedAt: "2026-07-21T00:00:01Z", completedAt: null }],
+      events: [],
+      confirmations: []
+    }];
+    render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }} initialEntries={["/loop?session=session_running"]}><AppView /></MemoryRouter>);
+    expect(await screen.findByRole("status")).toHaveTextContent("Working...");
+    expect(screen.getByRole("button", { name: "停止当前 Turn" })).toBeInTheDocument();
+  });
+
   it("renders Agent messages and tool calls in chronological order", async () => {
     const repository: AgentRepository = {
       id: "repo_timeline",

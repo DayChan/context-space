@@ -6,9 +6,9 @@ import { createLogger } from "../logging";
 
 const port = Number(process.env.CONTEXT_SPACE_PORT ?? 4318);
 const host = process.env.CONTEXT_SPACE_HOST ?? "127.0.0.1";
-if (!["127.0.0.1", "localhost", "::1"].includes(host)) {
+if (!["127.0.0.1", "localhost", "::1", "0.0.0.0"].includes(host)) {
   throw new Error(
-    "Context Space V1 仅支持单用户本机运行，CONTEXT_SPACE_HOST 必须是 loopback 地址"
+    "CONTEXT_SPACE_HOST 必须是 127.0.0.1、localhost、::1 或 0.0.0.0"
   );
 }
 const workspaceRoot = path.resolve(process.env.CONTEXT_SPACE_ROOT ?? "./workspace");
@@ -52,7 +52,11 @@ try {
   await runtime.markdownIndexSync.start();
   const server = app.listen(port, host, () => {
     if (quietCli) {
-      const urlHost = host === "::1" ? "[::1]" : host;
+      const urlHost = host === "::1"
+        ? "[::1]"
+        : host === "0.0.0.0"
+          ? "127.0.0.1"
+          : host;
       process.stdout.write(`http://${urlHost}:${port}\n`);
     }
     serverLogger.info("server.listening", {

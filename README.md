@@ -6,7 +6,7 @@ Context Space 是一个单用户、本机运行的工作上下文系统。它通
 
 ## V1 安全边界
 
-- 服务默认只监听 `127.0.0.1`。
+- 服务默认只监听 `127.0.0.1`；只有显式配置 `0.0.0.0` 才会开放远程访问。
 - 所有修改型 API 都要求进程级随机 CSRF Token；带 Origin 的请求还必须通过精确 Origin 校验。
 - 飞书集成使用 `lark-cli --as user` 和严格的只读命令白名单。
 - LLM 在完整拉取落盘后接收有容量上限的批量上下文；每条来源文本都会明确标记为不可信数据。
@@ -42,6 +42,18 @@ CONTEXT_SPACE_ROOT=/absolute/private/path \
 CONTEXT_SPACE_PORT=4318 \
 npx @duoruchen/context-space
 ```
+
+在可信局域网中允许其他设备访问：
+
+```bash
+CONTEXT_SPACE_HOST=0.0.0.0 \
+CONTEXT_SPACE_PORT=4318 \
+npx --registry=https://registry.npmjs.org/ @duoruchen/context-space
+```
+
+远程设备通过 `http://<运行服务的机器 IP>:4318` 访问。`0.0.0.0`
+表示监听所有 IPv4 网卡，不是供浏览器访问的目标地址。服务不提供用户登录鉴权，
+不要直接暴露到公网；跨不可信网络访问时应使用 SSH 隧道或具备访问控制的私有网络。
 
 也可以先全局安装：
 

@@ -25,11 +25,63 @@ function numericUsage(value: unknown): Record<string, number> | null {
   return entries.length ? Object.fromEntries(entries) : null;
 }
 
-function parseFinal(value: unknown): Omit<AgentRuntimeResult, "threadId" | "usage"> {
-  const candidate = typeof value === "string" ? JSON.parse(value) : value;
+function structuredJsonSuffix(
+  value: string
+): { candidate: unknown; displayMessage: string | null } | undefined {
+  let start = value.lastIndexOf("{");
+  while (start >= 0) {
+    try {
+      const candidate = JSON.parse(value.slice(start));
+      if (agentTurnResultSchema.safeParse(candidate).success) {
+        return {
+          candidate,
+          displayMessage: value.slice(0, start).trim() || null
+        };
+      }
+    } catch {
+      // 继续向前寻找能够覆盖完整协议对象的起点。
+    }
+    start = start > 0 ? value.lastIndexOf("{", start - 1) : -1;
+  }
+  return undefined;
+}
+
+function parseFinal(
+  value: unknown,
+  options: { allowPlainText?: boolean } = {}
+): Omit<AgentRuntimeResult, "threadId" | "usage"> {
+  let candidate = value;
+  let displayMessage: string | null = null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    try {
+      candidate = JSON.parse(trimmed);
+    } catch (error) {
+      const structuredSuffix = options.allowPlainText
+        ? structuredJsonSuffix(trimmed)
+        : undefined;
+      if (structuredSuffix !== undefined) {
+        candidate = structuredSuffix.candidate;
+        displayMessage = structuredSuffix.displayMessage;
+      } else {
+        if (
+          !options.allowPlainText ||
+          !trimmed ||
+          trimmed.startsWith("{") ||
+          trimmed.startsWith("[")
+        ) {
+          throw error;
+        }
+        return {
+          message: trimmed,
+          outcome: "awaiting_reply"
+        };
+      }
+    }
+  }
   const parsed = agentTurnResultSchema.parse(candidate);
   return {
-    message: parsed.message,
+    message: displayMessage ?? parsed.message,
     outcome: parsed.outcome,
     ...(parsed.confirmation ? { confirmation: parsed.confirmation } : {})
   };
@@ -187,7 +239,9 @@ export class TraexAgentRuntime implements AgentRuntime {
         }
       });
       if (!threadId) throw new Error("TraeX 未返回可恢复的 Session ID");
-      const parsed = parseFinal(await readFile(resultPath, "utf8"));
+      const parsed = parseFinal(await readFile(resultPath, "utf8"), {
+        allowPlainText: Boolean(input.threadId)
+      });
       return { threadId, ...parsed, usage };
     } finally {
       await rm(temporaryDirectory, { recursive: true, force: true });

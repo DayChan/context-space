@@ -100,6 +100,74 @@ process.stdout.write(JSON.stringify({ type: "turn.completed", usage: { input_tok
     expect(events).toContain("thread.started");
   });
 
+  it("将 TraeX Resume 返回的普通文本安全降级为等待回复", async () => {
+    const command = await executable("fake-traex-resume", `
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const output = args[args.indexOf("--output-last-message") + 1];
+fs.writeFileSync(output, "好的，我们来讨论方案细节。");
+process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "traex-session" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
+`);
+    const result = await new TraexAgentRuntime(command).run(runtimeInput({
+      threadId: "traex-session"
+    }));
+    expect(result).toMatchObject({
+      threadId: "traex-session",
+      message: "好的，我们来讨论方案细节。",
+      outcome: "awaiting_reply",
+      usage: null
+    });
+  });
+
+  it("优先解析 TraeX Resume 正文末尾的结构化结果", async () => {
+    const command = await executable("fake-traex-mixed-output", `
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const output = args[args.indexOf("--output-last-message") + 1];
+const result = {
+  message: "请确认方案。",
+  outcome: "needs_confirmation",
+  confirmation: {
+    kind: "decision",
+    question: "是否继续？",
+    options: ["继续", "调整"]
+  }
+};
+fs.writeFileSync(output, "这里是详细方案，示例代码包含 { braces: true }。\\n\\n" + JSON.stringify(result));
+process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "traex-session" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
+`);
+    const result = await new TraexAgentRuntime(command).run(runtimeInput({
+      threadId: "traex-session"
+    }));
+    expect(result).toMatchObject({
+      threadId: "traex-session",
+      message: "这里是详细方案，示例代码包含 { braces: true }。",
+      outcome: "needs_confirmation",
+      confirmation: {
+        kind: "decision",
+        question: "是否继续？",
+        options: ["继续", "调整"]
+      }
+    });
+    expect(result.message).not.toContain('"outcome"');
+  });
+
+  it("不把 TraeX Resume 返回的损坏 JSON 降级为普通文本", async () => {
+    const command = await executable("fake-traex-invalid-json", `
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const output = args[args.indexOf("--output-last-message") + 1];
+fs.writeFileSync(output, '{"message":');
+process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "traex-session" }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
+`);
+    await expect(new TraexAgentRuntime(command).run(runtimeInput({
+      threadId: "traex-session"
+    }))).rejects.toThrow(/JSON/);
+  });
+
   it("解析 Claude stream-json 的 Session ID 和 structured_output", async () => {
     const command = await executable("fake-claude", `
 process.stdin.resume();

@@ -1687,6 +1687,7 @@ function LoopPage() {
                 const turn = item.value;
                 return <article className="agent-turn-error" data-testid="agent-timeline-item" key={`turn-${turn.id}`} role="alert"><strong>Agent Turn {turn.status === "failed" ? "执行失败" : turn.status === "cancelled" ? "已取消" : "被服务重启中断"}</strong><p>{turn.error ?? "未提供错误详情"}</p><small>{formatDate(turn.completedAt ?? turn.createdAt)} · 会话与工作区已保留，可发送消息继续</small></article>;
               })}
+              {lastTurn?.status === "running" && <div className="agent-working" role="status"><Activity className="spin" size={15} /><strong>Working...</strong></div>}
             </div>
             {pendingConfirmations.map((confirmation) => <section className="agent-confirmation" key={confirmation.id}><CircleUserRound size={18} /><div><strong>需要人工确认</strong><p>{confirmation.question}</p><div>{confirmation.options.map((option) => <button className="secondary-button" key={option} onClick={() => void answer(confirmation.id, option)} type="button">{option === "approve" ? "批准" : option === "reject" ? "拒绝" : option}</button>)}</div></div></section>)}
             <form className="agent-composer" onSubmit={send}><textarea aria-label="发送给 Agent" onChange={(event) => setMessage(event.target.value)} placeholder="继续和 Agent 对话…" value={message} /><button className="primary-button" disabled={sending || !message.trim() || selectedDetail.status !== "active"} type="submit"><Send size={16} />发送</button></form>
